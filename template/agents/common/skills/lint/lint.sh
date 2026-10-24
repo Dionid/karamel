@@ -342,12 +342,19 @@ if wants decisions; then
   knowledge_root=""
   knowledge_route=""
   if [ -f "$MANIFEST_REL" ]; then
-    if knowledge_route="$(python3 "$ROOT/agents/common/skills/knowledge/resolve.py" "$ROOT" --allow-missing)"; then
+    TMP_RESOLVE="$(mktemp)"
+    if knowledge_route="$(python3 "$ROOT/agents/common/skills/knowledge/resolve.py" "$ROOT" --allow-missing 2>"$TMP_RESOLVE")"; then
       knowledge_repo="$(jq -r '.repo' <<<"$knowledge_route")"
       knowledge_root="$(jq -r '.root' <<<"$knowledge_route")"
+    elif grep -q 'found: none$' "$TMP_RESOLVE"; then
+      # Ни одного knowledge-репозитория — штатное состояние нового воркспейса:
+      # о нём предупреждает ветка ниже, а не падение линта.
+      :
     else
+      cat "$TMP_RESOLVE" >&2
       fail decisions
     fi
+    rm -f "$TMP_RESOLVE"
   fi
 
   team_registry=""

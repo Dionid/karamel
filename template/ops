@@ -97,6 +97,7 @@ Runtime maintenance:
   lint install-hook               Install the pre-commit lint hook
   lint install-tools              Install pinned external lint tools
   completion bash|zsh             Print shell completion
+  upgrade [--dry-run]             Pull the shared agent layer from workspace.json "upstream"
 
 Run 'npm run ops -- help <command>' for contextual examples.
 EOF
@@ -175,6 +176,19 @@ EOF
     adopt) printf '%s\n' 'Usage: ./ops adopt <feature/branch> --repo <name> [--repo <other>] [options]' ;;
     lint) printf '%s\n' 'Usage: ./ops lint [strict|install-hook|install-tools] [lint options]' ;;
     completion) printf '%s\n' 'Usage: ./ops completion bash|zsh' ;;
+    upgrade)
+      cat <<'EOF'
+Usage: ./ops upgrade [--dry-run]
+
+Fetches the upstream repository named by workspace.json "upstream" (branch
+"upstreamRef", default main) into .agent-tools/upstream and runs its
+skills/new-workspace/new-workspace.sh upgrade on this workspace: the shared
+layer (agents/, ops, docs, CI) is overwritten, team files (repos.json,
+workspace.json, PACKAGES.md, README.md, notion.json, CODEOWNERS, IDENTITY.md,
+SOUL.md, AGENTS.md, .env.example) are never touched. Refuses on uncommitted
+changes. Review with git diff, then ./ops sync, ./ops check and a regular PR.
+EOF
+      ;;
     *) die "unknown command: $1" ;;
   esac
 }
@@ -184,7 +198,7 @@ completion() {
     bash)
       cat <<'EOF'
 _agent_workspace_ops() {
-  local commands="help setup sync update status check clone doctor wt pull adopt lint completion"
+  local commands="help setup sync update status check clone doctor wt pull adopt lint completion upgrade"
   if [ "$COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "$commands" -- "${COMP_WORDS[COMP_CWORD]}") )
   fi
@@ -196,7 +210,7 @@ EOF
       cat <<'EOF'
 _agent_workspace_ops() {
   local -a commands
-  commands=(help setup sync update status check clone doctor wt pull adopt lint completion)
+  commands=(help setup sync update status check clone doctor wt pull adopt lint completion upgrade)
   _describe 'command' commands
 }
 compdef _agent_workspace_ops ops ./ops
@@ -282,6 +296,9 @@ case "$command" in
     ;;
   completion)
     completion "${1:-}"
+    ;;
+  upgrade)
+    "$(skill_tool self-update/upgrade.sh)" --root "$ROOT" "$@"
     ;;
   *)
     die "unknown command: $command (run './ops help')"

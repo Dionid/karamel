@@ -27,6 +27,9 @@ npm run ops -- adopt feature/my-task --repo <repo>
 
 npm run ops -- lint
 npm run ops -- lint strict
+
+npm run ops -- upgrade --dry-run
+npm run ops -- upgrade
 ```
 
 On a fresh clone, `./ops setup` also copies `.env.example` to the ignored

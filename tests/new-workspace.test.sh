@@ -33,7 +33,9 @@ m = json.load(open(f"{root}/repos.json"))
 assert m["always"] == ["acme-knowledge"], m
 assert m["repos"]["acme-knowledge"]["knowledgeRoot"] == "knowledge", m
 assert m["repos"]["api"] == {"url": "https://github.com/acme/api", "branch": "develop"}, m
-assert json.load(open(f"{root}/workspace.json"))["team"] == "Acme"
+ws = json.load(open(f"{root}/workspace.json"))
+assert ws["team"] == "Acme", ws
+assert ws["upstream"] and ws["upstreamRef"] == "main", ws
 assert "[api](https://github.com/acme/api)" in open(f"{root}/PACKAGES.md").read()
 PY
 ok "repos.json, workspace.json, PACKAGES.md"
@@ -50,9 +52,18 @@ ok "create отказывается писать в непустой катал�
 
 # shellcheck disable=SC2086 # LINT_ARGS намеренно делится на слова
 (cd "$WS" && bash agents/common/skills/lint/lint.sh --only syntax --only shellcheck \
-  --only execbit --only markdown --only harness ${LINT_ARGS:-}) > "$TMP/lint.log" 2>&1 \
+  --only execbit --only markdown --only harness --only decisions ${LINT_ARGS:-}) > "$TMP/lint.log" 2>&1 \
   || { cat "$TMP/lint.log"; fail "lint созданного воркспейса"; }
 ok "lint созданного воркспейса"
+
+# Полный lint с behavior-тестами шаблона долгий и тянет Chromium: только по
+# FULL_LINT=1 (в CI).
+if [ "${FULL_LINT:-0}" = 1 ]; then
+  # shellcheck disable=SC2086 # LINT_ARGS намеренно делится на слова
+  (cd "$WS" && bash agents/common/skills/lint/lint.sh ${LINT_ARGS:-}) > "$TMP/lint-full.log" 2>&1 \
+    || { cat "$TMP/lint-full.log"; fail "полный lint созданного воркспейса"; }
+  ok "полный lint созданного воркспейса, включая behavior-тесты"
+fi
 
 python3 - "$WS" "$TMP/demo.git" <<'PY'
 import json, sys
@@ -85,5 +96,32 @@ ok "upgrade обновляет общий слой и не трогает ком
 echo x >> "$WS/GIT.md"
 "$NW" upgrade "$WS" > /dev/null 2>&1 && fail "upgrade при грязном дереве"
 ok "upgrade отказывается работать при незакоммиченных правках"
+
+# ./ops upgrade: upstream — локальный git-репозиторий с копией karamel.
+UP="$TMP/upstream"
+mkdir -p "$UP"
+cp -a "$KARAMEL/skills" "$KARAMEL/template" "$UP/"
+git -C "$WS" checkout -q GIT.md
+git -C "$UP" init -q -b main && git -C "$UP" add -A && git -C "$UP" commit -qm upstream
+python3 - "$WS" "$UP" <<'PY'
+import json, sys
+root, up = sys.argv[1:]
+ws = json.load(open(f"{root}/workspace.json"))
+ws["upstream"] = f"file://{up}"
+json.dump(ws, open(f"{root}/workspace.json", "w"), indent=2)
+PY
+git -C "$WS" commit -qam "point upstream to local copy"
+echo "# from upstream" >> "$UP/template/WORKTREES.md"
+git -C "$UP" commit -qam "upstream change"
+(cd "$WS" && ./ops upgrade > "$TMP/ops-upgrade.log" 2>&1) || { cat "$TMP/ops-upgrade.log"; fail "./ops upgrade"; }
+grep -q '# from upstream' "$WS/WORKTREES.md" || { cat "$TMP/ops-upgrade.log"; fail "./ops upgrade не привёз изменение из upstream"; }
+[ -d "$WS/.agent-tools/upstream/.git" ] || fail "нет кэша .agent-tools/upstream"
+if git -C "$WS" status --porcelain | grep -q '.agent-tools'; then fail ".agent-tools попал в git status"; fi
+git -C "$WS" commit -qam "upgrade"
+echo "# second" >> "$UP/template/WORKTREES.md"
+git -C "$UP" commit -qam "upstream change 2"
+(cd "$WS" && ./ops upgrade > "$TMP/ops-upgrade2.log" 2>&1) || { cat "$TMP/ops-upgrade2.log"; fail "повторный ./ops upgrade"; }
+grep -q '# second' "$WS/WORKTREES.md" || fail "повторный ./ops upgrade не обновил кэш upstream"
+ok "./ops upgrade тянет общий слой из upstream (clone, затем fetch)"
 
 echo "all passed"

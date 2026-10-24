@@ -13,7 +13,9 @@ set -euo pipefail
 
 SELF="$(basename "$0")"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-TEMPLATE="${KARAMEL_TEMPLATE:-$(cd "$HERE/../.." && pwd)/template}"
+KARAMEL="$(cd "$HERE/../.." && pwd)"
+TEMPLATE="${KARAMEL_TEMPLATE:-$KARAMEL/template}"
+DEFAULT_UPSTREAM="https://github.com/Dionid/karamel"
 
 TEAM_FILES=(repos.json workspace.json PACKAGES.md README.md notion.json CODEOWNERS IDENTITY.md SOUL.md AGENTS.md .env.example)
 # Командные файлы, которые create всегда переписывает: их расхождение с шаблоном
@@ -34,6 +36,8 @@ create options:
   --team <name>             имя команды для workspace.json и README (обязательно)
   --agent <name>            имя агента (по умолчанию "Engineering agent")
   --branch-prefix <prefix>  префикс веток задач (по умолчанию "codex/")
+  --upstream <url>          откуда ./ops upgrade берёт общий слой (по умолчанию
+                            origin этого karamel или $DEFAULT_UPSTREAM)
   --repo <name>=<url>[@<branch>]
                             продуктовый репозиторий; можно повторять
   --knowledge <name>=<url>[@<branch>]
@@ -62,7 +66,7 @@ template_files() { (cd "$TEMPLATE" && find . -type f ! -path './.git/*' | sed 's
 
 # ----------------------------------------------------------------- create --
 cmd_create() {
-  local dir="" team="" agent="Engineering agent" prefix="codex/"
+  local dir="" team="" agent="Engineering agent" prefix="codex/" upstream=""
   local setup=1 clone=1 git=1
   local -a repos=() knowledge=()
   while [ $# -gt 0 ]; do
@@ -70,6 +74,7 @@ cmd_create() {
       --team) team="${2:?--team needs a value}"; shift ;;
       --agent) agent="${2:?--agent needs a value}"; shift ;;
       --branch-prefix) prefix="${2:?--branch-prefix needs a value}"; shift ;;
+      --upstream) upstream="${2:?--upstream needs a url}"; shift ;;
       --repo) repos+=("${2:?--repo needs name=url}"); shift ;;
       --knowledge) knowledge+=("${2:?--knowledge needs name=url}"); shift ;;
       --no-setup) setup=0 ;;
@@ -88,17 +93,22 @@ cmd_create() {
     die "каталог не пуст: $dir"
   fi
 
+  if [ -z "$upstream" ]; then
+    upstream="$(git -C "$KARAMEL" config --get remote.origin.url 2>/dev/null || true)"
+    upstream="${upstream:-$DEFAULT_UPSTREAM}"
+  fi
+
   mkdir -p "$dir"
   dir="$(cd "$dir" && pwd)"
   say "копирую шаблон в $dir"
   cp -a "$TEMPLATE/." "$dir/"
 
   say "пишу workspace.json, repos.json, PACKAGES.md, README.md"
-  python3 - "$dir" "$team" "$agent" "$prefix" "${knowledge[0]:-}" "${repos[@]}" <<'PY'
+  python3 - "$dir" "$team" "$agent" "$prefix" "$upstream" "${knowledge[0]:-}" "${repos[@]}" <<'PY'
 import json, re, sys
 from pathlib import Path
 
-root, team, agent, prefix, knowledge, *repos = sys.argv[1:]
+root, team, agent, prefix, upstream, knowledge, *repos = sys.argv[1:]
 root = Path(root)
 
 def parse(spec):
@@ -125,7 +135,8 @@ for spec in repos:
 (root / "repos.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
 
 ws = json.loads((root / "workspace.json").read_text())
-ws.update({"team": team, "agent": agent, "branchPrefix": prefix})
+ws.update({"team": team, "agent": agent, "branchPrefix": prefix,
+           "upstream": upstream, "upstreamRef": "main"})
 (root / "workspace.json").write_text(json.dumps(ws, indent=2, ensure_ascii=False) + "\n")
 
 if rows:
