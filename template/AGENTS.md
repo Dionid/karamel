@@ -97,13 +97,13 @@ agents/codex/    только Codex: config.base.toml
 
 ## Знания и спецификации
 
-Перед созданием или правкой командных материалов в `knowledge/` используйте
+Перед созданием или правкой командных материалов в `<knowledge-root>/` используйте
 skill **`knowledge`**: он определяет канонический репозиторий через
 `repos.json.always`, категорию знания и ответственного. Любая авторская запись идёт в
 `worktrees/<task>/<knowledge-repo>/<knowledge-root>/`; `packages/` остаётся только для
 чтения. Единственное исключение — воспроизводимое machine-generated зеркало,
 чей source-specific skill явно владеет fixed branch и reusable Draft PR; оно
-пишет только в `knowledge/references/` разрешённого snapshot-репозитория из `notionSnapshotRepo` (если настроен).
+пишет только в `<knowledge-root>/references/` разрешённого snapshot-репозитория из `notionSnapshotRepo` (если настроен).
 
 Продуктовые требования дополнительно маршрутизирует skill **`spec`**: он
 вычисляет `<spec-repo>` и `<specRoot>` из манифеста и ведёт в
@@ -234,9 +234,9 @@ worktree — во временном каталоге); `./ops sync` запус�
   коммит в `packages/`.
 - Заметная человеку фича или изменение в `agents/` — новый скилл, изменённый
   дефолт, переименованная `.env`-переменная, правка операторского CLI —
-  перед закрытием задачи получает запись `knowledge/changelog/YYYY-MM-DD-<slug>.md`
+  перед закрытием задачи получает запись `<knowledge-root>/changelog/YYYY-MM-DD-<slug>.md`
   (первая строка `# Заголовок`, дальше абзац): это история команды, а не
-  движка. Сам `knowledge/` живёт в knowledge-репозитории, не здесь, поэтому
+  движка. Сам каталог знаний живёт в knowledge-репозитории, не здесь, поэтому
   запись идёт в `worktrees/<task>/<knowledge-repo>/<knowledge-root>/changelog/` и
   закрывается вторым PR той же задачи. Внутренний рефакторинг без видимого
   поведения записи не требует. Если подключён skill **`changelog`**, он исполняет это правило:
@@ -306,8 +306,8 @@ Root обновляет источник через `wt` и отправляет
 ### Track P
 
 Исполняет terminal `explorer`; root готовит dispatch, проверяет ответ и отвечает.
-Читайте источники истины по приоритету: `knowledge/facts/` →
-`knowledge/decisions/` → продуктовые документы и задачи → specs → code. Все
+Читайте источники истины по приоритету: `<knowledge-root>/facts/` →
+`<knowledge-root>/decisions/` → продуктовые документы и задачи → specs → code. Все
 они лежат в knowledge-репозитории: в открытой задаче это
 `worktrees/<task>/<knowledge-repo>/<knowledge-root>/`, для чтения дефолтной ветки —
 `packages/<knowledge-repo>/<knowledge-root>/`.

@@ -185,6 +185,32 @@ for unsafe in /tmp/mirror knowledge/references/../facts projects/pay/knowledge/r
   SNAPSHOT_DIR="$unsafe" refuses "mirror directory $unsafe must be rejected" NOTION_SNAPSHOT_DIR
 done
 
+# Root knowledge layout drives both discovery and the bounded write directory.
+manifest "{\"always\":[\"root-store\"],\"repos\":{\"root-store\":{\"knowledgeRoot\":\".\",\"url\":\"$url\"}}}"
+SNAPSHOT_DIR=""
+resolves "$url" "explicit root knowledge repository without packages"
+[[ "$(snapshot_directory)" == references ]] || fail=1
+[[ "$(snapshot_directory references/team)" == references/team ]] || fail=1
+for unsafe in knowledge/references references/../facts /tmp/mirror references-elsewhere; do
+  SNAPSHOT_DIR="$unsafe" refuses "root mirror must reject $unsafe" NOTION_SNAPSHOT_DIR
+done
+manifest "{\"always\":[],\"notionSnapshotRepo\":\"mirror\",\"repos\":{\"mirror\":{\"knowledgeRoot\":\"projects/pay\",\"url\":\"$url\"}}}"
+resolves "$url" "dedicated mirror uses its own configured root"
+[[ "$(snapshot_directory)" == projects/pay/references ]] || fail=1
+SNAPSHOT_DIR="references" refuses "dedicated mirror cannot use authored root" NOTION_SNAPSHOT_DIR
+manifest "{\"always\":[\"authored\"],\"repos\":{\"authored\":{\"knowledgeRoot\":\".\",\"url\":\"$url\"},\"foreign\":{\"knowledgeRoot\":\"archive\",\"url\":\"https://github.com/group/foreign.git\"}}}"
+[[ "$(NOTION_SNAPSHOT_PROJECT=group/foreign snapshot_directory)" == archive/references ]] || fail=1
+[[ "$(NOTION_SNAPSHOT_PROJECT=group/unknown snapshot_directory)" == knowledge/references ]] || fail=1
+NOTION_SNAPSHOT_ALLOW_FOREIGN_PROJECT=yes override_resolves group/foreign https://github.com/group/foreign.git "foreign override uses its own manifest root"
+if NOTION_SNAPSHOT_PROJECT=group/foreign snapshot_directory references >/dev/null 2>&1; then
+  echo "foreign override accepted another repository's root" >&2
+  fail=1
+fi
+manifest "{\"always\":[],\"notionSnapshotRepo\":\"mirror\",\"repos\":{\"mirror\":{\"knowledgeRoot\":\"../escape\",\"url\":\"$url\"}}}"
+refuses "unsafe snapshot knowledge root" NOTION_SNAPSHOT_DIR
+# shellcheck disable=SC2034  # consumed by sourced entrypoint and functions
+SNAPSHOT_DIR="knowledge/references"
+
 # Explicit null disables publication, even with stale or deliberate env overrides.
 # A legacy candidate on disk must not reopen discovery after removal.
 manifest '{"always":["new"],"notionSnapshotRepo":null,"repos":{"new":{"specRoot":"knowledge/specs","url":"git@github.com:group/new.git"}}}'
@@ -231,6 +257,12 @@ if validate_snapshot_path "$tmp/snapshot" knowledge/references/pay 2>/dev/null; 
 fi
 rm "$tmp/snapshot/knowledge/references"
 validate_snapshot_path "$tmp/snapshot" knowledge/references/pay
+mkdir -p "$tmp/root-snapshot"
+ln -s "$tmp/outside" "$tmp/root-snapshot/references"
+if validate_snapshot_path "$tmp/root-snapshot" references/pay 2>/dev/null; then
+  echo "root references symlink escaped snapshot checkout" >&2
+  fail=1
+fi
 
 # --- the committer identity -------------------------------------------------
 #

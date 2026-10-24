@@ -20,7 +20,7 @@
 #                             whatever repo the run happened to start in, and an
 #                             unresolvable target is a refusal before any write.
 #   NOTION_SNAPSHOT_DIR       directory inside that repo. Default:
-#                             knowledge/references
+#                             <knowledgeRoot>/references (knowledge/references if absent)
 #   NOTION_SNAPSHOT_BRANCH    the fixed branch this snapshot accumulates on.
 #                             Default: notion/snapshot
 #   NOTION_SNAPSHOT_GIT_EMAIL committer email in the temporary checkout. The
@@ -134,7 +134,7 @@ CORE_LIB="$(resolve_skill_path commit-and-mr/lib.sh)" \
 gl_load "$WORKSPACE_ROOT"
 WORKSPACE_ROOT="$GL_WORKSPACE_ROOT"
 
-SNAPSHOT_DIR="${NOTION_SNAPSHOT_DIR:-knowledge/references}"
+SNAPSHOT_DIR="${NOTION_SNAPSHOT_DIR:-}"
 DEFAULT_BRANCH="${NOTION_SNAPSHOT_BRANCH:-notion/snapshot}"
 # Named once, so the precondition that refuses it and the config that would set
 # it cannot drift apart.
@@ -163,37 +163,13 @@ configured_roots() {
   done < <(jq -r '.roots | keys_unsorted[]' "$manifest")
 }
 
-# Legacy snapshot discovery, only when notionSnapshotRepo is absent.
-#
-# Compatibility with the original knowledge/ convention: a
-# candidate is an `always` entry whose checkout actually holds `knowledge/`, or
-# whose `specRoot` in the manifest points inside `knowledge/`. The second half
-# matters because `packages/` is empty in a fresh clone and in CI, and "not
-# checked out" is not "has no knowledge".
-#
-# Prints one `<name>\t<url>` line per candidate, so the caller can refuse on
-# zero and on more than one rather than picking silently.
+# Without notionSnapshotRepo, reuse authored knowledge routing, including
+# explicit roots and legacy discovery. Inspection-only mode permits fresh clones.
 knowledge_repo_candidates() {
-  local manifest="$WORKSPACE_ROOT/repos.json" line rest name specroot url
-  [[ -f "$manifest" ]] || return 1
-  # Split by hand rather than with `IFS=$'\t' read -r name specroot url`: tab is
-  # an IFS *whitespace* character, so bash collapses a run of them into one
-  # delimiter, and an entry without a specRoot would silently hand its url to
-  # the wrong variable.
-  while IFS= read -r line; do
-    name="${line%%$'\t'*}"
-    rest="${line#*$'\t'}"
-    specroot="${rest%%$'\t'*}"
-    url="${rest#*$'\t'}"
-    [[ -n "$name" ]] || continue
-    if [[ -d "$WORKSPACE_ROOT/packages/$name/knowledge" ]] \
-      || [[ "$specroot" == "knowledge" || "$specroot" == knowledge/* ]]; then
-      printf '%s\t%s\n' "$name" "$url"
-    fi
-  done < <(jq -r '
-    (.always // [])[] as $n
-    | [$n, (.repos[$n].specRoot // ""), (.repos[$n].url // "")] | @tsv
-  ' "$manifest")
+  local resolver route
+  resolver="$(resolve_skill_path knowledge/resolve.py)" || return 1
+  route="$(python3 "$resolver" "$WORKSPACE_ROOT" --allow-missing)" || return 1
+  jq -r '[.repo, .url] | @tsv' <<<"$route"
 }
 
 # The snapshot repository this manifest names, as "<name>\t<url>".
@@ -246,6 +222,53 @@ manifest_target() {
   printf '%s\t%s\n' "$names" "$url"
 }
 
+# Resolve the write boundary from the selected snapshot repository, independently
+# of the authored store when notionSnapshotRepo names a dedicated mirror.
+snapshot_directory() {
+  local resolved="" name="" resolver override_url identity candidate url
+  if resolved="$(manifest_target 2>/dev/null)"; then
+    name="${resolved%%$'\t'*}"
+  fi
+  # An allowed foreign override uses that repository's own configured root.
+  # Unknown foreign repositories retain the legacy boundary, not another repo's.
+  if [[ -n "${NOTION_SNAPSHOT_PROJECT-}" ]]; then
+    case "$NOTION_SNAPSHOT_PROJECT" in
+      *://* | *:*) override_url="$NOTION_SNAPSHOT_PROJECT" ;;
+      *) override_url="https://github.com/${NOTION_SNAPSHOT_PROJECT#/}.git" ;;
+    esac
+    identity="$(project_identity "$override_url")" || identity=""
+    name=""
+    if [[ -f "$WORKSPACE_ROOT/repos.json" ]]; then
+      while IFS=$'\t' read -r candidate url; do
+        if [[ -n "$identity" && -n "$url" && "$(project_identity "$url")" == "$identity" ]]; then
+          [[ -z "$name" ]] || die "NOTION_SNAPSHOT_DIR: ambiguous override repository"
+          name="$candidate"
+        fi
+      done < <(jq -r '.repos | to_entries[] | [.key, (.value.url // "")] | @tsv' "$WORKSPACE_ROOT/repos.json")
+    fi
+  fi
+  resolver="$(resolve_skill_path knowledge/resolve.py)" || return 1
+  python3 - "$resolver" "$WORKSPACE_ROOT/repos.json" "$name" "${1-}" <<'PYDIR'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location("knowledge_roots", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+    entry = json.loads(Path(sys.argv[2]).read_text())["repos"][sys.argv[3]] if sys.argv[3] else {}
+    root = module.relative_root(entry.get("knowledgeRoot", "knowledge"))
+    boundary = Path(root) / "references"
+    target = Path(module.relative_root(sys.argv[4])) if sys.argv[4] else boundary
+    if not target.is_relative_to(boundary):
+        raise ValueError(f"must stay under {boundary.as_posix()}")
+    print(target.as_posix())
+except (ValueError, KeyError, OSError) as error:
+    sys.exit(f"NOTION_SNAPSHOT_DIR: {error}")
+PYDIR
+}
+
 # Check the destination in the cloned repository before replacing a mirror.
 validate_snapshot_path() {
   python3 - "$1" "$2" <<'PYSAFE'
@@ -286,13 +309,6 @@ target_project_url() {
     "$WORKSPACE_ROOT/repos.json" >/dev/null 2>&1; then
     die "snapshot publishing is disabled by notionSnapshotRepo=null in $WORKSPACE_ROOT/repos.json — use notion for reading or --no-push for a local dump"
   fi
-  case "$SNAPSHOT_DIR" in
-    knowledge/references | knowledge/references/*) ;;
-    *) die "NOTION_SNAPSHOT_DIR must stay under knowledge/references" ;;
-  esac
-  case "/$SNAPSHOT_DIR/" in
-    */../* | */./* | *\\*) die "unsafe NOTION_SNAPSHOT_DIR" ;;
-  esac
   if resolved="$(manifest_target)"; then
     resolved_name="${resolved%%$'\t'*}"
     resolved_url="${resolved#*$'\t'}"
@@ -318,6 +334,7 @@ target_project_url() {
         || die "NOTION_SNAPSHOT_PROJECT='$NOTION_SNAPSHOT_PROJECT' is not the snapshot repository $resolved_name ($resolved_url) that $WORKSPACE_ROOT/repos.json names — refusing before the Notion walk, because a snapshot pushed to the wrong project looks like an ordinary Draft MR; fix NOTION_SNAPSHOT_PROJECT, or set NOTION_SNAPSHOT_ALLOW_FOREIGN_PROJECT=yes if this target is deliberate"
     fi
 
+    snapshot_directory "$SNAPSHOT_DIR" >/dev/null || die "invalid NOTION_SNAPSHOT_DIR"
     printf '%s\n' "$override_url"
     return 0
   fi
@@ -325,6 +342,7 @@ target_project_url() {
   [[ -n "$resolved_url" ]] \
     || die "NOTION_SNAPSHOT_PROJECT is not set and $reason — set NOTION_SNAPSHOT_PROJECT to the project that owns $SNAPSHOT_DIR"
 
+  snapshot_directory "$SNAPSHOT_DIR" >/dev/null || die "invalid NOTION_SNAPSHOT_DIR"
   printf 'RESOLVED_TARGET_FROM=repos.json snapshot entry %s\n' "$resolved_name" >&2
   printf '%s\n' "$resolved_url"
 }
@@ -495,6 +513,7 @@ main() {
   # full snapshot.
   local project_url=""
   if [[ "$push" == "yes" ]]; then
+    SNAPSHOT_DIR="$(snapshot_directory "$SNAPSHOT_DIR")"
     project_url="$(target_project_url)"
     require_committer_identity
     proj_from_url "$project_url" >/dev/null || die "cannot parse a project from '$project_url'"

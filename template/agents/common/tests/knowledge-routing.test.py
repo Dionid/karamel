@@ -24,7 +24,9 @@ for required in (
     "worktrees/<task>/<knowledge-repo>/<knowledge-root>/",
     "packages/<knowledge-repo>/<knowledge-root>/",
     "machine-generated snapshot",
-    "knowledge/references/",
+    "<knowledge-root>/references/",
+    'knowledgeRoot: "."',
+    "Не добавляйте к этому пути `knowledge/`",
 ):
     assert required in knowledge, f"knowledge skill lost routing rule: {required}"
 

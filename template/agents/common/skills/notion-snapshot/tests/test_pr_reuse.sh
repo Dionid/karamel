@@ -12,13 +12,14 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.test GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.test
 WORKSPACE_ROOT="$TMP/ws"
 mkdir -p "$WORKSPACE_ROOT"
+printf '%s\n' '{"always":["store"],"repos":{"store":{"url":"https://github.com/owner/knowledge.git","knowledgeRoot":"."}}}' > "$WORKSPACE_ROOT/repos.json"
 git init -q -b main "$TMP/seed"
 printf 'base\n' > "$TMP/seed/base"
 git -C "$TMP/seed" add base
 git -C "$TMP/seed" commit -qm fixture
 git clone -q --bare "$TMP/seed" "$TMP/origin.git"
 NOTION_SNAPSHOT_GIT_EMAIL=t@example.test
-SNAPSHOT_DIR=knowledge/references
+SNAPSHOT_DIR=""
 configured_roots() { echo demo; }
 target_project_url() { echo https://github.com/owner/knowledge.git; }
 gl_require_gh() { return 0; }
@@ -49,6 +50,11 @@ SNAPSHOT_BODY=first
 out="$(main)"
 grep -q 'MR_STATE=created' <<< "$out"
 grep -q 'MR_URL=https://github.com/owner/knowledge/pull/1' <<< "$out"
+[[ "$(git --git-dir="$TMP/origin.git" show notion/snapshot:references/demo/INDEX.md)" == first ]]
+if git --git-dir="$TMP/origin.git" cat-file -e notion/snapshot:knowledge 2>/dev/null; then
+  echo 'snapshot recreated knowledge/ despite knowledgeRoot="."' >&2
+  exit 1
+fi
 SNAPSHOT_BODY=second
 out="$(main)"
 grep -q 'MR_STATE=existing' <<< "$out"

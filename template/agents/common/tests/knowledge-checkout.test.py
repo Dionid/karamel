@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as scratch:
     (task / "store/projects/pay/knowledge").rmdir()
     rejects(lambda: resolver.resolve(ws, task), "configured knowledge directory is missing")
 
-    for unsafe in ("/tmp/knowledge", "../knowledge", "projects/../knowledge", "", ".", None, 7, "a\\b"):
+    for unsafe in ("/tmp/knowledge", "../knowledge", "projects/../knowledge", "", "./", None, 7, "a\\b"):
         manifest["repos"]["store"]["knowledgeRoot"] = unsafe
         save()
         rejects(lambda: resolver.resolve(ws), "knowledgeRoot")
@@ -65,6 +65,17 @@ with tempfile.TemporaryDirectory() as scratch:
     link = store / "escape"
     link.symlink_to(outside)
     manifest["repos"]["store"]["knowledgeRoot"] = "escape"
+    save()
+    rejects(lambda: resolver.resolve(ws), "escapes checkout")
+
+    # An explicit dot selects the checkout itself, never a new knowledge/ child.
+    manifest["repos"]["store"]["knowledgeRoot"] = "."
+    save()
+    assert resolver.resolve(ws)["root"] == "."
+    assert resolver.resolve(ws, task)["checkout"] == str(task / "store")
+    # Only explicit '.' permits equality; a symlink alias cannot disguise it.
+    (store / "self").symlink_to(store, target_is_directory=True)
+    manifest["repos"]["store"]["knowledgeRoot"] = "self"
     save()
     rejects(lambda: resolver.resolve(ws), "escapes checkout")
 
@@ -87,6 +98,10 @@ with tempfile.TemporaryDirectory() as scratch:
         "new": {"knowledgeRoot": "projects/pay/knowledge"}}}
     save()
     assert resolver.resolve(ws, allow_missing=True)["repo"] == "new"
+    rejects(lambda: resolver.resolve(ws), "not inspected")
+    manifest["repos"]["new"]["knowledgeRoot"] = "."
+    save()
+    assert resolver.resolve(ws, allow_missing=True)["root"] == "."
     rejects(lambda: resolver.resolve(ws), "not inspected")
 
 print("knowledge checkout: pass")

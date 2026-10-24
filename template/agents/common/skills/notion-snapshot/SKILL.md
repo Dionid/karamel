@@ -49,8 +49,8 @@ credentials и обхода Notion, даже при `NOTION_SNAPSHOT_PROJECT` и
 машинного зеркала; авторские знания и спеки в него не переносятся.
 Чтение через `notion` и локальный дамп `--no-push` доступны независимо от публикации.
 
-Если `notionSnapshotRepo` отсутствует, сохраняется прежняя discovery по
-единственному `always`-репозиторию с `knowledge/` или `specRoot` внутри него.
+Если `notionSnapshotRepo` отсутствует, discovery выполняет `knowledge/resolve.py` по
+единственному `always`-репозиторию, включая явный `knowledgeRoot` и legacy `knowledge/`.
 Некорректное явное поле — отказ даже при `NOTION_SNAPSHOT_PROJECT`: оно не
 переключается молча на канонический репозиторий или origin workspace.
 
@@ -58,8 +58,13 @@ credentials и обхода Notion, даже при `NOTION_SNAPSHOT_PROJECT` и
 host/path. Несовпадение останавливает прогон до обхода; осознанный foreign
 project требует `NOTION_SNAPSHOT_ALLOW_FOREIGN_PROJECT=yes`. Без явного поля
 и без legacy-кандидата override может задать цель самостоятельно.
-`NOTION_SNAPSHOT_DIR` должен оставаться внутри `knowledge/references/`;
-абсолютные пути, `..` и symlink за пределы checkout запрещены.
+`NOTION_SNAPSHOT_DIR` по умолчанию — `<knowledgeRoot>/references` выбранного
+snapshot-репозитория: `references/` при `knowledgeRoot: "."`,
+`knowledge/references/` без поля. Переопределение разрешено только внутри этого
+каталога; абсолютные пути, `..` и symlink за пределы checkout запрещены.
+Для отдельного `notionSnapshotRepo` читается его собственный `knowledgeRoot`;
+foreign override использует `knowledgeRoot` своей записи в манифесте,
+а неизвестный манифесту репозиторий — legacy `knowledge/references/`.
 
 Коммитер тоже часть права на запись: `NOTION_SNAPSHOT_GIT_EMAIL` проверяют push
 rules целевого проекта. Задавайте разрешённый адрес явно до прогона:
@@ -78,7 +83,7 @@ PR вместо task worktree. Исключение не распростран�
 ```bash
 NOTION_SNAPSHOT_PROJECT=   # "group/path" или полный URL; пусто — цель
                            # разрешается из repos.json, без fallback на origin
-NOTION_SNAPSHOT_DIR=       # по умолчанию: knowledge/references
+NOTION_SNAPSHOT_DIR=       # по умолчанию: <knowledgeRoot>/references
 NOTION_SNAPSHOT_BRANCH=    # по умолчанию: notion/snapshot
 NOTION_SNAPSHOT_GIT_EMAIL= # обязателен; адрес из push-rule целевого проекта
 NOTION_SNAPSHOT_ALLOW_FOREIGN_PROJECT=  # yes — снять сверку, но не запрет null
