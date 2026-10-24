@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "tiers": ["fast", "balanced", "strong"],
+  "efforts": ["low", "medium", "high"],
+  "strongestAvailable": {
+    "codex": "gpt-6-astra"
+  },
+  "rootDefaults": {
+    "claude": {"model": "opus", "effort": "high"},
+    "codex": {"model": "strongestAvailable", "effort": "high"}
+  },
+  "roleMinimums": {
+    "explorer": {"tier": "balanced", "effort": "medium"},
+    "scout": {"tier": "balanced", "effort": "medium", "floor": {"tier": "fast", "effort": "low"}},
+    "worker": {"tier": "balanced", "effort": "medium"},
+    "builder": {"tier": "balanced", "effort": "medium"},
+    "analyst": {"tier": "strong", "effort": "high"},
+    "architect": {"tier": "strong", "effort": "high"},
+    "reviewer": {"tier": "strong", "effort": "high"}
+  },
+  "providers": {
+    "claude": {
+      "supportedModels": ["haiku", "sonnet", "opus"],
+      "models": {
+        "fast": ["haiku", "sonnet"],
+        "balanced": ["sonnet", "opus"],
+        "strong": ["opus", "sonnet"]
+      },
+      "effortFallbacks": {
+        "high": ["high", "medium", "low"],
+        "medium": ["medium", "high", "low"],
+        "low": ["low", "medium", "high"]
+      }
+    },
+    "codex": {
+      "supportedModels": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-sol"],
+      "models": {
+        "fast": ["gpt-6-luna", "gpt-5.6-luna"],
+        "balanced": ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
+        "strong": ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol"]
+      },
+      "effortFallbacks": {
+        "high": ["high", "medium", "low"],
+        "medium": ["medium", "high", "low"],
+        "low": ["low", "medium", "high"]
+      }
+    }
+  }
+}

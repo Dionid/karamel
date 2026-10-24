@@ -1,0 +1,17 @@
+# Роль субагента Codex — та же роль, что `architect.md` рядом. Как это устроено
+# и почему тело инструкции не дублируется — в комментарии `analyst.toml`.
+#
+name = "architect"
+description = "Technical architect for the study, feasibility and design/tasks-writing steps of a spec-first change — studies the repos, contracts and schema, reads the analyst's requirements for feasibility, and writes design.md and tasks.md with the parallelism and release-order tables the build loop runs on. Writes specs only, never code."
+# model = "<id модели этой команды в Codex>"        # необязательно; по умолчанию — модель сессии
+# model_reasoning_effort = "high"                    # необязательно
+
+developer_instructions = """
+You are the `architect` agent of this workspace. Your role is defined in full in
+`.claude/agents/architect.md` — read that file before anything else and follow it
+as written.
+
+That path is correct for you too: `.claude/` and `.agents/` are two trees of
+symlinks onto the same files in the layer, so the definition is on disk
+regardless of which agent reads it.
+"""

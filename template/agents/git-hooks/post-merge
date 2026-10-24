@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# post-merge — после `git pull` (merge или fast-forward) в корневом чекауте
+# воркспейса сначала подтягивает чекауты `packages/` через `./ops wt pull all`,
+# а затем пересобирает рантайм-деревья через `./ops sync`. Порядок задан командой:
+# сначала pull, затем sync.
+#
+# Ставится `./ops setup` / `./ops sync` симлинком в .git/hooks, так что новая
+# версия хука приезжает вместе с обычным pull. `post-rewrite` для
+# `git pull --rebase` вызывает этот же файл.
+#
+# Хук работает только в корне: `.git/hooks` общий для всех linked worktree, а
+# `./ops sync` в `worktrees/<task>/agent-workspace` или `packages/agent-workspace`
+# нагенерировал бы там `.claude/` и превратил бы их в отдельные корни.
+#
+# Хук fail-open (см. AGENTS.md, «Гард пропускает, тест падает»): pull уже
+# случился, откатить его хук не может, а ненулевой код только запутает. Падение
+# `wt pull all` или sync — предупреждение в stderr и код 0; сбой `wt pull` sync
+# не отменяет. Рекурсии нет: `wt pull all` делает fast-forward только
+# чекаутов в `packages/` и корень не трогает, а post-merge в
+# `packages/agent-workspace` выходит по проверке пути ниже.
+#
+# Отключить: WORKSPACE_NO_AUTO_SYNC=1 — всё; WORKSPACE_NO_AUTO_WT_PULL=1 — только
+# `wt pull all` (sync выполнится).
+
+[ "${WORKSPACE_NO_AUTO_SYNC:-}" = "1" ] && exit 0
+
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -n "$top" ] || exit 0
+
+# В linked worktree `.git` — файл; в основном чекауте — каталог.
+[ -d "$top/.git" ] || exit 0
+# Корневой маркер — gitignore-нутый `harness.json` (тот же, что у self-update).
+[ -f "$top/harness.json" ] || exit 0
+# `packages/agent-workspace` — отдельный клон, и `./ops sync`, однажды запущенный
+# там, оставил бы и маркер; такой checkout корнем всё равно не считается.
+[ "$(basename "$(dirname "$top")")" = "packages" ] && exit 0
+[ -x "$top/ops" ] || exit 0
+
+if [ "${WORKSPACE_NO_AUTO_WT_PULL:-}" != "1" ]; then
+  # stdout `wt pull` глушим (по строке на репозиторий — это шум для pull);
+  # stderr оставляем: отказы по репозиториям там и объясняются.
+  # Окружение вызвавшего `git -c … pull` (конфиг, askpass, reflog) не должно
+  # утекать в `git fetch` по packages/: чистим его в подоболочке.
+  printf '%s\n' "post-merge: ./ops wt pull all ..."
+  if (
+    cd "$top" || exit 1
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT \
+      GIT_ASKPASS GIT_TERMINAL_PROMPT GIT_REFLOG_ACTION
+    for v in $(compgen -e | grep -E '^GIT_CONFIG_(KEY|VALUE)_' || true); do unset "$v"; done
+    "$top/ops" wt pull all >/dev/null
+  ); then
+    printf '%s\n' "post-merge: ./ops wt pull all done"
+  else
+    printf '%s\n' "post-merge: WARNING: ./ops wt pull all failed; packages/ may be stale. Run './ops wt pull all' manually." >&2
+  fi
+fi
+
+# git экспортирует GIT_DIR и родственные переменные в хук; дочерним git-командам
+# сборки они не нужны.
+if (cd "$top" && unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE && "$top/ops" sync >/dev/null); then
+  printf '%s\n' "post-merge: ./ops sync done"
+else
+  printf '%s\n' "post-merge: WARNING: ./ops sync failed; runtime trees (.claude/, .agents/, .codex/) may be stale. Run './ops sync' manually." >&2
+fi
+exit 0

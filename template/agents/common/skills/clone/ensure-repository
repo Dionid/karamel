@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+#
+# ensure-repository — atomically materialize packages/<repo> from repos.json.
+#
+# This is the shared primitive behind clone.sh and lazy wt new acquisition. It
+# validates the manifest entry, serializes same-repo clone attempts, clones into
+# a temporary directory under packages/ on the same filesystem, verifies that the
+# stored origin does not contain credentials, runs git fsck, then renames the
+# complete candidate into place.
+
+set -euo pipefail
+
+c_red=$'\033[31m'; c_grn=$'\033[32m'; c_ylw=$'\033[33m'; c_off=$'\033[0m'
+[ -t 1 ] || { c_red=""; c_grn=""; c_ylw=""; c_off=""; }
+info() { printf '%s%s%s\n' "$c_grn" "$*" "$c_off"; }
+warn() { printf '%s%s%s\n' "$c_ylw" "$*" "$c_off" >&2; }
+err()  { printf '%s%s%s\n' "$c_red" "$*" "$c_off" >&2; }
+
+usage() {
+  sed "s|@SELF@|$SELF|g" <<'EOF'
+ensure-repository — atomically create packages/<repo> from repos.json.
+
+  @SELF@ <repo>
+  @SELF@ --repo <repo>
+
+Existing git checkouts are verified and reused. Non-git paths fail closed.
+EOF
+}
+
+resolve_workspace_root() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [ -L "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+  done
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  if [ "${1-}" = --source-dir ]; then printf '%s\n' "$dir"; return 0; fi
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/harness.json" ]; then printf '%s\n' "$dir"; return 0; fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+ROOT_DIR="$(resolve_workspace_root)" \
+  || { err "cannot locate the workspace root — no harness.json above ${BASH_SOURCE[0]}"; exit 1; }
+SOURCE_DIR="$(resolve_workspace_root --source-dir)"
+SELF="$0"
+MANIFEST="$ROOT_DIR/repos.json"
+PKGS="$ROOT_DIR/packages"
+LOCK_ROOT="$PKGS/.locks"
+TMP_ROOT="$PKGS/.tmp"
+
+# gl_clone — clones GitHub repositories over HTTPS with the gh credential
+# logged-out gh stops with the login step) and keeps local/file remotes
+# on their native transport. The .claude
+# path is tried first because it is what a synced workspace actually uses;
+# script is the one clone.sh calls to bootstrap a machine "without jq", and it
+# must not gain a hard dependency on .claude/ existing yet.
+LIB="$SOURCE_DIR/../commit-and-mr/lib.sh"
+# shellcheck source=../commit-and-mr/lib.sh
+. "$LIB"
+gl_load "$ROOT_DIR"
+
+command -v git >/dev/null 2>&1 || { err "git not found"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { err "python3 not found (needed to read repos.json)"; exit 1; }
+[ -f "$MANIFEST" ] || { err "no manifest at $MANIFEST"; exit 1; }
+
+repo=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) repo="${2:-}"; [ -n "$repo" ] || { err "--repo needs a value"; exit 1; }; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --*) err "unknown flag: $1"; exit 1 ;;
+    *) [ -z "$repo" ] || { err "only one repo can be ensured at a time"; exit 1; }
+       repo="$1"; shift ;;
+  esac
+done
+[ -n "$repo" ] || { err "repo name required"; usage; exit 1; }
+
+case "$repo" in
+  *[!A-Za-z0-9._-]*|"."|".."|"") err "invalid repo name: $repo"; exit 1 ;;
+esac
+
+manifest_row() {
+  python3 - "$MANIFEST" "$repo" <<'PY'
+import json
+import sys
+
+manifest, repo = sys.argv[1:]
+with open(manifest) as fh:
+    data = json.load(fh)
+entry = data.get("repos", {}).get(repo)
+if entry is None:
+    sys.exit(f"not in repos.json: {repo}")
+url = entry.get("url")
+if not url:
+    sys.exit(f'{repo}: no "url" in repos.json')
+branch = entry.get("branch", "")
+print("\t".join([url, branch]))
+PY
+}
+
+has_token_like_userinfo() {
+  local url="$1"
+  case "$url" in
+    *://*@*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+verify_token_free_origin() {
+  local dir="$1" url
+  url="$(git -C "$dir" config --get remote.origin.url 2>/dev/null || true)"
+  [ -n "$url" ] || { err "[$repo] cloned repository has no origin remote"; return 1; }
+  if has_token_like_userinfo "$url"; then
+    err "[$repo] origin URL contains userinfo; store credentials outside git remotes"
+    return 1
+  fi
+}
+
+verify_existing() {
+  local dir="$1"
+  [ -e "$dir" ] || return 1
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 \
+    || { err "[$repo] path exists but is not a git repository: $dir"; return 2; }
+  verify_token_free_origin "$dir" || return 2
+  info "[$repo] already present — reused"
+  return 0
+}
+
+IFS=$'\t' read -r url branch < <(manifest_row)
+if has_token_like_userinfo "$url"; then
+  err "[$repo] manifest URL contains userinfo; use an scp-style git URL or credential-free HTTPS URL"
+  exit 1
+fi
+
+# gl_use resolves the web base for THIS repo's host; gl_clone below uses the
+# HTTPS/gh transport of commit-and-mr/lib.sh.
+gl_use "$(gl_host_from_url "$url" 2>/dev/null || true)"
+
+mkdir -p "$PKGS" "$LOCK_ROOT" "$TMP_ROOT"
+dir="$PKGS/$repo"
+
+existing_rc=0
+if verify_existing "$dir"; then
+  exit 0
+else
+  existing_rc=$?
+fi
+[ "$existing_rc" = 1 ] || exit 1
+
+lock="$LOCK_ROOT/$repo.lock"
+until mkdir "$lock" 2>/dev/null; do
+  warn "[$repo] another clone is in progress — waiting for $lock"
+  sleep 1
+  if verify_existing "$dir"; then exit 0; fi
+done
+
+tmp=""
+cleanup() {
+  [ -n "$tmp" ] && [ -d "$tmp" ] && rm -rf "$tmp"
+  [ -n "${lock:-}" ] && [ -d "$lock" ] && rmdir "$lock" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+existing_rc=0
+if verify_existing "$dir"; then
+  exit 0
+else
+  existing_rc=$?
+fi
+[ "$existing_rc" = 1 ] || exit 1
+
+tmp="$(mktemp -d "$TMP_ROOT/$repo.XXXXXX")"
+rmdir "$tmp"
+info "[$repo] cloning ${url}${branch:+ (branch $branch)}"
+if [ -n "$branch" ]; then
+  gl_clone "$url" "$tmp" --branch "$branch"
+else
+  gl_clone "$url" "$tmp"
+fi
+
+verify_token_free_origin "$tmp"
+git -C "$tmp" fsck --no-progress --connectivity-only >/dev/null
+
+if mv "$tmp" "$dir"; then
+  tmp=""
+  info "[$repo] ready: $dir"
+else
+  err "[$repo] atomic activation failed; leaving existing packages/$repo unchanged"
+  exit 1
+fi

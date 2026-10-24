@@ -1,0 +1,41 @@
+# Base несёт хук на утечку секретов. Lifecycle coordination живёт отдельно в
+# config.append.toml: repo-local builder добавляет его поверх base, чтобы
+# полный override этого файла не отключал heartbeat.
+#
+# Имена событий и ключей здесь те же, что в settings.json Claude Code —
+# PreToolUse (а не pre_tool_use: так их переименовывает serde), matcher, timeout.
+# Поэтому перенос и оказался переносом формата, а не смысла.
+#
+# @ROOT@ заменяется абсолютным путём воркспейса во время `./ops sync`.
+#
+# permissions.deny сюда НЕ переносится: у Codex другая модель — sandbox и
+# approval policy, — и прямого аналога у Edit(/packages/**) нет. Это оставлено
+# человеку сознательно, а не забыто.
+
+# Codex читает цепочку AGENTS.md только до project_doc_max_bytes (32 КиБ по
+# умолчанию) и молча отбрасывает хвост — а командные правила стоят в конце
+# файла. Единый AGENTS.md весит около 32 000 байт, то есть жил в сотнях байт
+# от обрезания. Ключ верхнего уровня, поэтому стоит до первой таблицы;
+# lint.py сверяет размер AGENTS.md с этим значением и краснеет при переполнении.
+project_doc_max_bytes = 65536
+
+# Субагенты. Track C — это агентский флот, поэтому без спавна субагентов Codex
+# не может пройти этот цикл вообще. Одного `multi_agent` в пользовательском
+# конфиге для этого мало: инструмент spawn_agent появляется в сессии только с
+# `multi_agent_v2`, и роли из .codex/agents/ (analyst, architect, builder,
+# reviewer) без него в сессию не приезжают — проверено `codex exec`.
+#
+# Флаг стоит здесь, в слое воркспейса, а не в ~/.codex/config.toml: включение
+# ограничено этим воркспейсом и не меняет поведение Codex в других проектах
+# человека.
+[features]
+multi_agent_v2 = true
+
+[[hooks.PreToolUse]]
+matcher = "Bash|shell|local_shell|exec_command|unified_exec"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "@ROOT@/.agents/hooks/block-secret-reads.sh"
+timeout = 10
+statusMessage = "Защита секретов — блокирует чтение .env и вывод secret-переменных"

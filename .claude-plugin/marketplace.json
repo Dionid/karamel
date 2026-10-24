@@ -1,0 +1,13 @@
+{
+  "name": "karamel",
+  "owner": {
+    "name": "Dionid"
+  },
+  "plugins": [
+    {
+      "name": "karamel",
+      "source": "./",
+      "description": "Создаёт и обновляет агентские воркспейсы по образцу bulka."
+    }
+  ]
+}

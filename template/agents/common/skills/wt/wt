@@ -1,0 +1,1604 @@
+#!/usr/bin/env bash
+#
+# wt — multi-repo worktree manager for the harness workspace.
+#
+# The file lives at .claude/skills/wt/wt, beside the skill that documents it, and
+# that path is the entry point — there is deliberately no ./wt at the workspace
+# root. Call it by path (../../.claude/skills/wt/wt from inside a repo) or alias
+# it. Either way the workspace is found by walking up from the script's real
+# location to the directory holding harness.json, so cwd never matters.
+#
+# Layout: packages/ holds the repos, worktrees/ holds every checkout created
+# from them, grouped by TASK first.
+#   <workspace>/
+#   ├── .claude/skills/wt/wt     <- this script
+#   ├── repos.json          <- manifest: which repos exist and where from
+#   ├── packages/                <- ROOT: the repos themselves (gitignored)
+#   │   └── <repo>/              <- any git repo directly under ROOT
+#   └── worktrees/               <- WT_ROOT: nothing but worktrees (gitignored)
+#       └── <task>/              <- one dir per task, branch feature/<task>
+#           └── <repo>/          <- that task's checkout of <repo>
+#
+# Neither packages/ nor worktrees/ is tracked by the workspace repo — repos.json
+# is the source of truth and `wt clone` recreates packages/ from it.
+#
+# Task-first worktrees mean a task spanning several repos lands in one directory,
+# so its whole surface is a single searchable tree; and packages/ stays
+# one-copy-per-repo, so a search there can't hit the same file on three branches.
+#
+# packages/<repo> is what every worktree branches from, and its node_modules /
+# .env* are what `wt new` reuses — a stale main checkout means stale deps.
+# So `wt new` REFUSES to run against a checkout that is behind origin/<base>:
+# --pull fast-forwards it, --allow-stale proceeds anyway. `wt doctor` reports the
+# same condition across every repo, plus broken links in existing worktrees.
+#
+# Each worktree is a full checkout. node_modules, .env* and Husky's installed
+# .husky/_ support directory are gitignored, so they are NOT shared
+# automatically. `wt new` symlinks every gitignored .env* (including nested
+# ones), copies .husky/_ when present, and takes its node_modules strategy from
+# repos.json ("deps") unless a flag overrides it.
+#
+# The default strategy is "clone-modules": a copy-on-write clone (APFS
+# clonefile) of packages/<repo>'s node_modules. It costs metadata only — a
+# gigabyte-scale dependency tree becomes tens of megabytes of real blocks and
+# takes seconds, against minutes and a full copy for an install — and the tree
+# is the WORKTREE'S OWN, so a targeted
+# `npm i <pkg>@<ver>` in it changes this checkout and nothing else. That is the
+# difference from "link-modules", which shares one directory with every other
+# worktree and therefore cannot hold a different version of anything.
+#
+# A full install therefore happens ONCE PER REPO, not once per task: when
+# packages/<repo> has no node_modules to clone, `wt new` installs THERE and
+# clones from the result, so every later worktree of that repo is seconds.
+# `wt seed` is the same install on demand, and skips a repo that already has one.
+#
+# Repos listed in repos.json "always" join EVERY `wt new` on top of the repos
+# asked for — that's how the OpenSpec repo (spec-repo) ends up in every
+# task tree, so a change's specs branch alongside its code. --no-always opts out.
+
+set -euo pipefail
+
+c_red=$'\033[31m'; c_grn=$'\033[32m'; c_ylw=$'\033[33m'; c_off=$'\033[0m'
+info() { printf '%s%s%s\n' "$c_grn" "$*" "$c_off"; }
+# warn goes to STDERR on purpose. Several helpers here are consumed through a
+# pipe or a command substitution — add_always feeds `resolve_repos | add_always`,
+# whose stdout IS the repo list — so a warning printed on stdout is read back as
+# a repo name, and the run then tries to `git -C packages/<the whole warning>`.
+warn() { printf '%s%s%s\n' "$c_ylw" "$*" "$c_off" >&2; }
+err()  { printf '%s%s%s\n' "$c_red" "$*" "$c_off" >&2; }
+
+# The workspace root is the directory holding harness.json. Resolve the symlink
+# chain first (so a symlink or a PATH shim to this file works too), then walk up
+# from the real file — dirname alone would give .claude/skills/wt.
+resolve_workspace_root() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [ -L "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+  done
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  if [ "${1-}" = --source-dir ]; then printf '%s\n' "$dir"; return 0; fi
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/harness.json" ]; then printf '%s\n' "$dir"; return 0; fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+SCRIPT_DIR="$(resolve_workspace_root)" \
+  || { err "cannot locate the workspace root — no harness.json above ${BASH_SOURCE[0]}"; exit 1; }
+# How this run was invoked, so every "fix: …" hint can be pasted back as-is —
+# the path to this file is long enough that a hardcoded `wt …` would be a lie.
+SOURCE_DIR="$(resolve_workspace_root --source-dir)"
+SELF="$0"
+ROOT="$SCRIPT_DIR/packages"
+WT_ROOT="$SCRIPT_DIR/worktrees"
+MANIFEST="$SCRIPT_DIR/repos.json"
+COORD="$SCRIPT_DIR/.claude/skills/coordination/coord"
+[ -x "$COORD" ] || COORD="$SCRIPT_DIR/agents/common/skills/coordination/coord"
+# Shared GitHub HTTPS transport; every fetch uses the selected GITHUB_TOKEN.
+LIB="$SOURCE_DIR/../commit-and-mr/lib.sh"
+# shellcheck source=../commit-and-mr/lib.sh
+. "$LIB"
+gl_load "$SCRIPT_DIR"
+# gl_use_repo <repo> — resolves the web base for THIS repo's own host from its
+# already-cloned origin under packages/.
+gl_use_repo() {
+  gl_use "$(gl_host_from_url "$(git -C "$ROOT/$1" remote get-url origin 2>/dev/null || true)" 2>/dev/null || true)"
+}
+# The branch prefix is per-workspace: harness.json "branchPrefix", default
+# feature/. Read with python3 rather than jq — this runs on a bare machine.
+read_branch_prefix() {
+  local root="$1" value=""
+  if command -v python3 >/dev/null 2>&1 && [ -f "$root/harness.json" ]; then
+    value="$(python3 -c 'import json,sys
+try:    print(json.load(open(sys.argv[1])).get("branchPrefix") or "")
+except Exception: print("")' "$root/harness.json" 2>/dev/null || true)"
+  fi
+  printf '%s' "${value:-feature/}"
+}
+BRANCH_PREFIX="$(read_branch_prefix "$SCRIPT_DIR")"
+
+mkdir -p "$ROOT"
+
+# Flag defaults live at global scope so helpers that read them (base_for,
+# resolve_deps, setup_env) work in commands that never call parse_args.
+POS=(); FLAG_REPOS=""; FLAG_BASE=""
+FLAG_INSTALL=0; FLAG_LINK_MODULES=0; FLAG_CLONE_MODULES=0; FLAG_NO_DEPS=0
+FLAG_COPY_ENV=0; FLAG_NO_ENV=0; FLAG_FORCE=0; FLAG_DELBRANCH=0
+FLAG_NO_ALWAYS=0; FLAG_PULL=0; FLAG_ALLOW_STALE=0; FLAG_NO_FETCH=0; FLAG_DRY_RUN=0
+COW_FELL_BACK=0   # set by cow_copy when the filesystem has no copy-on-write
+
+# Absolute path of the worktree dir for <repo>/<task> — task-first on disk.
+wt_path() { echo "$WT_ROOT/${2}/${1}"; }
+
+usage() {
+  # @SELF@ -> the actual invocation path; the heredoc stays quoted because the
+  # text below contains backticks.
+  sed "s|@SELF@|$SELF|g" <<'EOF'
+
+Usage — `wt` is .claude/skills/wt/wt; there is no ./wt at the root, so call it by
+path (or alias it: alias wt=<abs-path-to>/.claude/skills/wt/wt).
+
+  wt new   <task> [--repo <name>]... [--base <branch>] [deps flags]
+  wt list  [--repo <name>]...
+  wt rm    <task> [--repo <name>]... [--force] [--delete-branch]
+  wt prune [--repo <name>]...
+  wt cleanup [<task>]... [--dry-run] [--no-fetch]  # rm tasks merged into base
+  wt repos
+  wt pull  [<name>|--repo <name>]... | all  # fast-forward packages/ to origin
+  wt seed  [<name>|--repo <name>]... | all  # install node_modules in packages/
+  wt doctor [--repo <name>]... [--no-fetch]  # health of packages/ and worktrees/
+  wt clone [<name>|--repo <name>]...        # (re)create packages/ from repos.json
+  wt clone-url <task> <git-url> [--name <name>]  # one-off checkout outside the manifest
+  wt manifest                               # regenerate repos.json from packages/
+
+Repos are the git repos directly under packages/; worktrees go into
+worktrees/<task>/<repo> — task first, so one task's repos sit side by side.
+
+The main checkout(s) must be up to date before `wt new` — it refuses to branch
+off a packages/<repo> that is behind origin/<base>, because that tree is also
+where the worktree's .env*/node_modules/.husky/_ come from:
+  git -C packages/<repo> pull      # or: wt new … --pull   (fast-forwards it)
+                                   # or: wt new … --allow-stale  (proceed anyway)
+
+`wt pull` is the same fast-forward on its own, for READING the code rather than
+branching off it — every question about packages/<repo> starts with it, because
+an answer off a stale tree looks exactly like a right one. Fast-forward only: a
+dirty tree, local commits or a non-base branch is reported and skipped, and the
+command exits non-zero so a partial pull is never mistaken for a done one.
+  wt pull --repo api       # or: wt pull api signer
+  wt pull all                      # every repo in repos.json (slow, rarely what
+                                   # a question needs)
+
+`wt seed` installs node_modules in packages/<repo> — the tree every worktree
+copies. It is the ONE full install per repo: with it done, each `wt new` is a
+seconds-long copy-on-write clone. A repo that already has node_modules is
+skipped, not reinstalled (--force overrides), so re-running costs nothing. You
+rarely need to call it: `wt new` seeds the repo itself when there is nothing to
+clone. Call it to pay that wait outside a task, or after `wt clone` on a fresh
+machine.
+  @SELF@ seed --repo api           # or: wt seed api signer | wt seed all
+
+`wt clone-url` puts an occasional repository beside a task without adding it to
+`repos.json` or `packages/`; it does not install dependencies or run
+manifest hooks. The checkout name defaults to the repository name in the URL:
+  @SELF@ clone-url investigate-oidc git@github.com:team/oidc-proxy.git
+  @SELF@ clone-url investigate-oidc https://github.com/acme/demo.git --name demo
+
+--repo is repeatable: `wt new drop-promo --repo api --repo mobile-app`
+creates both under worktrees/drop-promo/. With no --repo, `new` uses the repo
+containing your current directory, and `rm`/`prune` default to EVERY repo of the
+task / every repo in packages/.
+
+`wt cleanup` removes, with their feature branches, the tasks whose work is
+already in the target branch — origin/<base> of each repo, fetched first. A
+task goes only when EVERY checkout of it is clean, on its branch (not detached,
+no rebase/merge in progress), holds no ignored files beyond rebuildable ones
+(node_modules, dist, symlinked .env*), and its HEAD is in the target — as an
+ancestor (merge, fast-forward) or as identical patches (rebase, cherry-pick) —
+and at least one checkout committed something. A task owned by a live
+coordination lease is never touched; a nested task (worktrees/<task>/<sub>/)
+is judged per sub. A squash merge of several commits leaves different patches
+behind, so such a task is kept and reported — remove it with `wt rm` once you
+have checked the MR.
+  @SELF@ cleanup --dry-run         # what would go, and why every other task stays
+  @SELF@ cleanup                   # every task under worktrees/
+  @SELF@ cleanup fix-rounding      # just these tasks
+
+`rm --repo` resolves against the checkouts the task actually has, so a NESTED
+task (worktrees/<task>/<sub>/<repo>, what adopt.sh creates for a branch
+feature/<task>/<sub>) is removed by repo name like any other:
+  wt rm withdraw-flow --repo web-cabinet
+When a task holds the same repo more than once, the name is ambiguous and rm
+refuses; pass the sub-path it lists back to you:
+  wt rm offramp --repo 03-bank-accounts/api
+
+Repos in repos.json "always" (spec-repo — the OpenSpec specs) are added to
+every `wt new` on top of --repo, so every task tree has its specs. --no-always
+leaves them out.
+
+--base defaults to the repo's "branch" in repos.json, else origin/HEAD.
+Branches are named feature/<task>.
+
+Staleness flags for `new` (default: refuse and tell you to pull):
+  --pull           fast-forward packages/<repo> to origin/<base> first
+  --allow-stale    branch off origin/<base> anyway, keeping the old tree's deps
+
+Dependency / env flags for `new` (default: repos.json "deps", and clone-modules
+when it says nothing):
+  --clone-modules  THE DEFAULT. Copy-on-write clone (APFS clonefile) of the
+                   repo's node_modules: seconds, near-zero disk, and the tree
+                   belongs to this worktree — `npm i <pkg>@<ver>` in it changes
+                   nothing outside. When packages/<repo> has no node_modules yet
+                   it installs THERE once (see `wt seed`) and clones from it, so
+                   the full install is paid once per repo, not once per task.
+  --install        install from scratch with the detected package manager
+                   (bun/pnpm/yarn/npm) — minutes, and a full copy of the deps.
+                   Only needed when the cloned tree is not trusted.
+  --link-modules   symlink node_modules from the repo: instant, 0 disk, but the
+                   directory is SHARED — no per-worktree versions, and in a
+                   workspace monorepo the internal @scope/* imports resolve to
+                   the MAIN checkout. Read-only tasks only.
+  --no-deps        don't set up node_modules at all
+  --copy-env       copy .env* instead of symlinking (independent per worktree)
+  --no-env         don't bring over .env* at all
+  --no-always      skip the repos.json "always" repos (the specs repo)
+
+Examples, with the path as you invoked it just now:
+  # bootstrap a fresh machine, then see what needs pulling
+  @SELF@ clone
+  @SELF@ doctor
+  # one repo, fast-forwarding its main checkout first
+  @SELF@ new fix-rounding --repo api-backend --pull
+  # one task across three repos -> worktrees/drop-promo/{…,…,…}
+  @SELF@ new drop-promo --repo shared-lib --repo api --repo mobile-app
+  @SELF@ rm drop-promo --delete-branch
+  # from inside a repo, which auto-detects --repo
+  cd packages/web-cabinet && ../../.claude/skills/wt/wt new spike-ui
+EOF
+}
+
+# ---------------------------------------------------------------- manifest ----
+
+need_jq() {
+  command -v jq >/dev/null 2>&1 || { err "jq is required for this command (brew install jq)"; exit 1; }
+}
+has_manifest() { [ -f "$MANIFEST" ]; }
+need_manifest() {
+  need_jq
+  has_manifest || { err "no manifest at $MANIFEST — run: $SELF manifest"; exit 1; }
+}
+
+# Scalar field of a repo entry, empty if absent / no manifest / no jq.
+manifest_get() {
+  has_manifest || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r --arg r "$1" --arg k "$2" '.repos[$r][$k] // empty' "$MANIFEST" 2>/dev/null || true
+}
+# Array field of a repo entry, one element per line.
+manifest_list() {
+  has_manifest || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r --arg r "$1" --arg k "$2" '.repos[$r][$k][]? // empty' "$MANIFEST" 2>/dev/null || true
+}
+manifest_repos()   { jq -r '.repos | keys[]' "$MANIFEST"; }
+manifest_has_repo() { jq -e --arg r "$1" '.repos[$r] != null' "$MANIFEST" >/dev/null; }
+manifest_excluded() {
+  has_manifest || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r '.exclude[]? // empty' "$MANIFEST" 2>/dev/null || true
+}
+is_excluded() { manifest_excluded | grep -qxF "$1"; }
+
+# Repos that join every `wt new` regardless of --repo — the specs repo.
+manifest_always() {
+  has_manifest || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r '.always[]? // empty' "$MANIFEST" 2>/dev/null || true
+}
+
+# Run a manifest hook list (postClone / postSetup) with cwd = $2.
+# Hooks get ROOT_WORKTREE_PATH (the main checkout) — same name the old
+# per-repo .claude/worktrees.json used — plus WT_DIR and REPO_NAME.
+run_hooks() {
+  local repo="$1" dir="$2" key="$3" cmd n=0 rc=0
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    n=$((n+1))
+    info "  ${key}[$n]: $cmd"
+    if ! ( cd "$dir" \
+             && ROOT_WORKTREE_PATH="$ROOT/$repo" WT_DIR="$dir" REPO_NAME="$repo" \
+                bash -c "$cmd" ); then
+      err "  ${key}[$n] failed: $cmd"; rc=1; break
+    fi
+  done < <(manifest_list "$repo" "$key")
+  return $rc
+}
+
+# ------------------------------------------------------------------- args -----
+
+# Leftover positionals land in POS[]. --repo is repeatable and accumulates into
+# FLAG_REPOS as a newline-separated list.
+parse_args() {
+  POS=(); FLAG_REPOS=""; FLAG_BASE=""
+  FLAG_INSTALL=0; FLAG_LINK_MODULES=0; FLAG_CLONE_MODULES=0; FLAG_NO_DEPS=0
+  FLAG_COPY_ENV=0; FLAG_NO_ENV=0; FLAG_FORCE=0; FLAG_DELBRANCH=0
+  FLAG_NO_ALWAYS=0; FLAG_PULL=0; FLAG_ALLOW_STALE=0; FLAG_NO_FETCH=0; FLAG_DRY_RUN=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) [ -n "${2:-}" ] || { err "--repo needs a value"; exit 1; }
+              FLAG_REPOS="${FLAG_REPOS}${2}"$'\n'; shift 2 ;;
+      --base) FLAG_BASE="${2:-}"; shift 2 ;;
+      --install) FLAG_INSTALL=1; shift ;;
+      --link-modules) FLAG_LINK_MODULES=1; shift ;;
+      --clone-modules) FLAG_CLONE_MODULES=1; shift ;;
+      --no-deps) FLAG_NO_DEPS=1; shift ;;
+      --copy-env) FLAG_COPY_ENV=1; shift ;;
+      --no-env) FLAG_NO_ENV=1; shift ;;
+      --no-always) FLAG_NO_ALWAYS=1; shift ;;
+      --pull) FLAG_PULL=1; shift ;;
+      --allow-stale) FLAG_ALLOW_STALE=1; shift ;;
+      --no-fetch) FLAG_NO_FETCH=1; shift ;;
+      --dry-run) FLAG_DRY_RUN=1; shift ;;
+      --force) FLAG_FORCE=1; shift ;;
+      --delete-branch) FLAG_DELBRANCH=1; shift ;;
+      --*) err "unknown flag: $1"; exit 1 ;;
+      *) POS+=("$1"); shift ;;
+    esac
+  done
+}
+
+is_repo() { git -C "$ROOT/$1" rev-parse --git-dir >/dev/null 2>&1; }
+
+# Every git repo under packages/, one per line.
+all_repos() {
+  local d name
+  for d in "$ROOT"/*/; do
+    [ -d "$d" ] || continue
+    name="$(basename "${d%/}")"
+    is_repo "$name" || continue
+    echo "$name"
+  done
+}
+
+# The --repo values, validated.
+flag_repos() {
+  local r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    [ -d "$ROOT/$r" ] || { err "no such directory under packages/: $r"; exit 1; }
+    is_repo "$r" || { err "$r is not a git repo"; exit 1; }
+    echo "$r"
+  done <<< "$FLAG_REPOS"
+}
+
+flag_repo_names() {
+  local r
+  need_manifest
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    manifest_has_repo "$r" || { err "not in repos.json: $r"; exit 1; }
+    echo "$r"
+  done <<< "$FLAG_REPOS"
+}
+
+# Echo the repo NAME containing $PWD: an ancestor at packages/<repo>, or at any
+# depth under worktrees/ (a task name can be nested). In every layout the
+# directory name IS the repo name, so a match against packages/ decides.
+detect_repo() {
+  local cur parent name; cur="$(pwd -P)"
+  while [ "$cur" != "/" ]; do
+    parent="$(dirname "$cur")"
+    name="$(basename "$cur")"
+    if [ "$parent" = "$ROOT" ] || [ "${cur#"$WT_ROOT"/}" != "$cur" ]; then
+      if is_repo "$name"; then echo "$name"; return 0; fi
+    fi
+    cur="$parent"
+  done
+  return 1
+}
+
+# --repo values if given, else the repo containing $PWD.
+resolve_repos() {
+  if [ -n "$FLAG_REPOS" ]; then flag_repos; return; fi
+  detect_repo && return 0
+  err "could not detect repo from current directory (not under packages/ or worktrees/<task>/) — pass --repo <name> (see: $SELF repos)"
+  exit 1
+}
+
+resolve_new_repos() {
+  if [ -n "$FLAG_REPOS" ]; then flag_repo_names; return; fi
+  resolve_repos
+}
+
+add_always_manifest() {
+  local seen="" r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    echo "$r"; seen="$seen $r "
+  done
+  [ "$FLAG_NO_ALWAYS" = 1 ] && return 0
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case "$seen" in *" $r "*) continue ;; esac
+    manifest_has_repo "$r" || { err "\"always\" repo '$r' is not in repos.json"; exit 1; }
+    echo "$r"; seen="$seen $r "
+  done < <(manifest_always)
+}
+
+ensure_repo() {
+  local repo="$1" ensure="$SOURCE_DIR/../clone/ensure-repository"
+  [ -x "$ensure" ] || { err "ensure-repository not found"; return 1; }
+  "$ensure" "$repo"
+}
+
+ensure_repos_for_new() {
+  local repo
+  while IFS= read -r repo; do
+    [ -n "$repo" ] || continue
+    ensure_repo "$repo" || return 1
+  done
+}
+
+# Filter: reads a repo list on stdin, echoes it back with the manifest's
+# "always" repos appended (once, and only if they exist in packages/). Every
+# task tree gets the specs repo this way without anyone having to name it.
+add_always() {
+  local seen="" r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    echo "$r"; seen="$seen $r "
+  done
+  [ "$FLAG_NO_ALWAYS" = 1 ] && return 0
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case "$seen" in *" $r "*) continue ;; esac
+    if [ ! -d "$ROOT/$r" ] || ! is_repo "$r"; then
+      warn "\"always\" repo '$r' is not a git repo under packages/ — skipped (run: $SELF clone $r)"
+      continue
+    fi
+    echo "$r"; seen="$seen $r "
+  done < <(manifest_always)
+}
+
+# Every checkout under worktrees/, as a path relative to worktrees/ — sorted, so
+# the ones of a task come out together:
+#   drop-promo/api
+#   withdraw-flow/03-wallets/api
+# The depth varies because a nested task name nests the directory too:
+# adopt.sh puts feature/withdraw-flow/03-wallets in
+# worktrees/withdraw-flow/03-wallets/<repo>. So nothing here may assume
+# worktrees/<task>/<repo> — a checkout is a directory with a .git entry (a file
+# in a worktree), and the grouping directories above it are not checkouts.
+# With an argument, only the checkouts under worktrees/<arg>/.
+wt_checkouts() {
+  local scope="${1:-}" root="$WT_ROOT" g d
+  [ -n "$scope" ] && root="$WT_ROOT/$scope"
+  [ -d "$root" ] || return 0
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    d="$(dirname "$g")"
+    printf '%s\n' "${d#"$WT_ROOT"/}"
+  done < <(find "$root" -maxdepth 5 \
+             \( -name node_modules -o -name .dart_tool -o -name Pods \
+                -o -name build -o -name dist \) -prune \
+             -o -name .git -prune -print 2>/dev/null | sort)
+}
+
+# The checkouts of <task>, as paths relative to worktrees/<task>/ — "api"
+# for a flat task, "03-wallets/api" for a nested one. Either way it is
+# what goes after worktrees/<task>/, which is what wt_path builds.
+task_repos() {
+  local t="$1" sub
+  while IFS= read -r sub; do
+    [ -n "$sub" ] || continue
+    printf '%s\n' "${sub#"$t"/}"
+  done < <(wt_checkouts "$t")
+}
+
+# origin/HEAD is written once, at clone time, and git NEVER refreshes it — so a
+# repo whose default branch was changed on the server afterwards keeps pointing at
+# the old one locally. web-cabinet was exactly that: origin/HEAD ->
+# origin/main long after GitHub's default became `development`.
+#
+# That is why repos.json's "branch" outranks this (see base_for) and why
+# cmd_manifest refuses to overwrite an existing one. Pass `refresh` to ask the
+# remote first — a network round trip, so only callers that are rewriting the
+# manifest do it.
+default_base() {
+  local repo="$ROOT/$1" ref
+  if [ "${2-}" = refresh ]; then
+    git -C "$repo" remote set-head origin --auto > /dev/null 2>&1 || true
+  fi
+  if ref="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"; then
+    echo "${ref#origin/}"; return
+  fi
+  git -C "$repo" branch --show-current
+}
+
+# repos.json "branch" wins over origin/HEAD; --base wins over both.
+base_for() {
+  local repo="$1" b
+  if [ -n "$FLAG_BASE" ]; then echo "$FLAG_BASE"; return; fi
+  b="$(manifest_get "$repo" branch)"
+  [ -n "$b" ] && { echo "$b"; return; }
+  default_base "$repo"
+}
+
+# How many commits of origin/<base> the packages/<repo> checkout is missing.
+# Not just an old start point: that tree is where the worktree's .env* and
+# node_modules are linked from, so "behind" means stale deps too. 0 when there
+# is no origin/<base> to compare against (a local-only base branch).
+behind_count() {
+  local repo="$1" base="$2"
+  git -C "$ROOT/$repo" show-ref --verify --quiet "refs/remotes/origin/${base}" || { echo 0; return 0; }
+  git -C "$ROOT/$repo" rev-list --count "HEAD..origin/${base}" 2>/dev/null || echo 0
+}
+
+is_workspace() {
+  local repo="$ROOT/$1"
+  [ -f "$repo/pnpm-workspace.yaml" ] && return 0
+  [ -f "$repo/package.json" ] && grep -q '"workspaces"' "$repo/package.json" && return 0
+  return 1
+}
+
+# -------------------------------------------------------------- worktree ------
+
+# Bring over every gitignored .env* found in the repo — including nested ones
+# like wallet/src/apps/main/.env — at the same relative path. Symlink (default),
+# copy, or skip. Tracked templates (.env.example / .env.sample) are left alone.
+# Every real (gitignored) .env* in packages/<repo>, as paths relative to it.
+# Tracked templates (.env.example / .env.sample) are excluded by check-ignore.
+# Shared by setup_env and doctor, so both agree on what a worktree should have.
+repo_env_files() {
+  local repo="$ROOT/$1" src rel
+  while IFS= read -r src; do
+    [ -f "$src" ] || continue
+    rel="${src#"$repo"/}"
+    git -C "$repo" check-ignore -q "$rel" || continue
+    printf '%s\n' "$rel"
+  done < <(find "$repo" -maxdepth 6 \
+             \( -name node_modules -o -name .git -o -name build -o -name .dart_tool \
+                -o -name Pods -o -name .gradle -o -name dist \) -prune \
+             -o -type f -name '.env*' -print 2>/dev/null)
+}
+
+setup_env() {
+  local repo="$ROOT/$1" dir="$2" n=0 rel
+  if [ "$FLAG_NO_ENV" = 1 ]; then warn "  --no-env: skipped .env*"; return 0; fi
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    if [ -e "$dir/$rel" ]; then continue; fi
+    mkdir -p "$dir/$(dirname "$rel")"
+    if [ "$FLAG_COPY_ENV" = 1 ]; then cp "$repo/$rel" "$dir/$rel"; else ln -s "$repo/$rel" "$dir/$rel"; fi
+    info "  env: $rel"
+    n=$((n+1))
+  done < <(repo_env_files "$1")
+  if [ "$n" = 0 ]; then warn "  no local (gitignored) .env* to reuse"; fi
+  if [ "$FLAG_COPY_ENV" = 1 ]; then
+    [ "$n" = 0 ] || info "  copied $n .env* file(s)"
+  else
+    [ "$n" = 0 ] || info "  symlinked $n .env* file(s) → reused from repo"
+  fi
+  return 0
+}
+
+# Husky keeps the hook entrypoints (for example .husky/pre-commit) in git, but
+# the installed support files live in gitignored .husky/_. A fresh git worktree
+# therefore has the hook file and not the husky.sh it sources. Copy only the
+# support directory from packages/<repo> so branch-local tracked hooks stay
+# owned by the worktree checkout.
+setup_husky() {
+  local repo="$ROOT/$1" dir="$2" src dst
+  src="$repo/.husky/_"
+  dst="$dir/.husky/_"
+  [ -d "$src" ] || return 0
+  if [ -e "$dst" ]; then
+    info "  husky: .husky/_ already present"
+    return 0
+  fi
+  mkdir -p "$dir/.husky"
+  if cow_copy "$src" "$dst"; then
+    info "  husky: copied .husky/_ support files"
+    return 0
+  fi
+  err "  failed to copy .husky/_ from packages/$1"
+  return 1
+}
+
+# Every node_modules dir of packages/<repo>, as paths relative to it — the root
+# one plus the nested ones a monorepo puts in its packages (wallet/node_modules,
+# libs/common/node_modules, app/node_modules …). Shared by link_modules,
+# clone_modules and doctor, so all three agree on what "the deps" are.
+repo_modules_dirs() {
+  local repo="$ROOT/$1" src
+  while IFS= read -r src; do
+    [ -n "$src" ] || continue
+    printf '%s\n' "${src#"$repo"/}"
+  done < <(find "$repo" -maxdepth 3 -name node_modules -type d -prune 2>/dev/null)
+}
+
+# Reuse node_modules by symlinking every node_modules dir found in the repo
+# (at its relative path) into the worktree. Instant, ~0 extra disk.
+link_modules() {
+  local repo="$ROOT/$1" dir="$2" n=0 rel
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    mkdir -p "$dir/$(dirname "$rel")"
+    ln -s "$repo/$rel" "$dir/$rel"
+    info "  symlinked $rel → reused from repo"
+    n=$((n+1))
+  done < <(repo_modules_dirs "$1")
+  if [ "$n" = 0 ]; then
+    warn "  no node_modules found in repo to link — run '--install' in the repo first, then retry"
+    return 0
+  fi
+  warn "  NOTE: this node_modules is SHARED with packages/$1 and every other"
+  warn "        worktree linking it — do not change a dependency's version here."
+  if is_workspace "$1"; then
+    warn "  NOTE: '$1' is a workspace monorepo — workspace-internal imports (@scope/*)"
+    warn "        will resolve to the MAIN checkout's source, not this worktree's."
+    warn "        If you'll edit shared workspace packages here, use --install instead."
+  fi
+  return 0
+}
+
+# Copy-on-write copy of one directory: APFS/BSD clonefile first, then GNU
+# reflink, then a plain recursive copy. A failed clone can leave a partial
+cow_copy() {
+  local src="$1" dst="$2"
+  cp -Rc "$src" "$dst" 2>/dev/null && return 0            # macOS / BSD clonefile
+  rm -rf "$dst"
+  cp -R --reflink=auto "$src" "$dst" 2>/dev/null && return 0   # GNU coreutils
+  rm -rf "$dst"
+  cp -R "$src" "$dst" 2>/dev/null && { COW_FELL_BACK=1; return 0; }
+  rm -rf "$dst"
+  return 1
+}
+
+# The default. Copy-on-write clone of every node_modules dir of the repo into
+# the worktree. On APFS the blocks are shared until something writes to them, so
+# this costs metadata only (~39 MB and ~40 s for api's 936 MB) and the
+# result is a REAL, independent tree: `npm i <pkg>@<ver>` in the worktree
+# rewrites only the packages that changed — seconds — and touches neither
+# packages/<repo> nor any sibling worktree.
+#
+# Relative symlinks inside it (node_modules/@scope/x -> ../../x, how npm wires
+# up workspaces) are copied as symlinks, so in the worktree they resolve to THIS
+# checkout's source — the monorepo caveat that link_modules has does not apply.
+clone_modules() {
+  local repo="$ROOT/$1" dir="$2" n=0 rel
+  COW_FELL_BACK=0
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    mkdir -p "$dir/$(dirname "$rel")"
+    info "  cloning $rel (copy-on-write) ..."
+    if ! cow_copy "$repo/$rel" "$dir/$rel"; then
+      err "  failed to copy $rel from packages/$1"
+      return 1
+    fi
+    n=$((n+1))
+  done < <(repo_modules_dirs "$1")
+
+  if [ "$n" = 0 ]; then
+    # Nothing to clone yet. Install in packages/<repo> — NOT in the worktree —
+    # and then clone from it. Installing in the worktree would work once and
+    # never again: the tree it produces is inside worktrees/<task>/, so
+    # packages/<repo> stays empty and the NEXT `wt new` pays the same full
+    # install. Seeding the main checkout is what makes this a one-time cost.
+    if [ -f "$repo/package.json" ] \
+       || [ -n "$(find "$repo" -maxdepth 2 -name package.json -not -path '*/node_modules/*' -print -quit 2>/dev/null)" ]; then
+      warn "  packages/$1 has no node_modules — installing THERE once, then cloning"
+      warn "    (every later worktree of $1 is then a seconds-long copy-on-write clone)"
+      run_install "$repo" || { err "  seeding install in packages/$1 failed"; return 1; }
+      while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        mkdir -p "$dir/$(dirname "$rel")"
+        info "  cloning $rel (copy-on-write) ..."
+        cow_copy "$repo/$rel" "$dir/$rel" || { err "  failed to copy $rel from packages/$1"; return 1; }
+        n=$((n+1))
+      done < <(repo_modules_dirs "$1")
+      [ "$n" = 0 ] && { warn "  install produced no node_modules in packages/$1"; return 0; }
+    else
+      info "  deps: nothing to clone (no package.json in packages/$1)"
+      return 0
+    fi
+  fi
+
+  if [ "$COW_FELL_BACK" = 1 ]; then
+    warn "  copied in full — this filesystem has no copy-on-write (expected APFS)"
+  fi
+  info "  deps: $n node_modules tree(s) cloned — this worktree owns them, so"
+  info "        'npm install <pkg>@<version>' here affects nothing outside it"
+  return 0
+}
+
+run_install() {
+  local dir="$1"
+  if [ ! -f "$dir/package.json" ]; then
+    local sub
+    sub="$(find "$dir" -maxdepth 2 -name package.json -not -path '*/node_modules/*' | head -1 || true)"
+    warn "  no package.json at worktree root; install skipped${sub:+ (found one at ${sub#$dir/} — use a postSetup hook in repos.json)}"
+    return 0
+  fi
+  info "  installing dependencies ..."
+  # The repos' .npmrc authenticate the private GitHub registry with
+  # ${NPM_TOKEN}, which lives in the workspace root .env — an
+  # install without them fails on the first @example-group package. Sourced in this
+  # subshell only, so nothing leaks into the caller's environment or output.
+  ( cd "$dir"
+    if [ -f "$SCRIPT_DIR/.env" ]; then set -a; . "$SCRIPT_DIR/.env"; set +a; fi
+    if   [ -f bun.lock ] || [ -f bun.lockb ]; then bun install
+    elif [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile
+    elif [ -f yarn.lock ]; then yarn install --frozen-lockfile
+    elif [ -f package-lock.json ]; then npm ci
+    else npm install; fi )
+}
+
+# clone-modules | install | link-modules | none.
+# A flag wins over repos.json, and repos.json over the default — which is
+# clone-modules, the cheapest strategy that still lets a worktree hold its own
+# dependency versions. "clone" is accepted as a spelling of it in the manifest.
+resolve_deps() {
+  local repo="$1" m
+  [ "$FLAG_NO_DEPS" = 1 ] && { echo none; return; }
+  [ "$FLAG_LINK_MODULES" = 1 ] && { echo link-modules; return; }
+  [ "$FLAG_INSTALL" = 1 ] && { echo install; return; }
+  [ "$FLAG_CLONE_MODULES" = 1 ] && { echo clone-modules; return; }
+  m="$(manifest_get "$repo" deps)"
+  case "$m" in
+    clone|clone-modules)   echo clone-modules; return ;;
+    install|link-modules|none) echo "$m"; return ;;
+  esac
+  echo clone-modules
+}
+
+new_one() {
+  local repo="$1" task="$2"
+  local base; base="$(base_for "$repo")"
+  local branch="${BRANCH_PREFIX}${task}"
+  local wt_dir; wt_dir="$(wt_path "$repo" "$task")"
+
+  if [ -e "$wt_dir" ]; then err "[$repo] path already exists: $wt_dir"; return 1; fi
+
+  info "[$repo] fetching origin/${base} ..."
+  gl_use_repo "$repo"
+  # An auth failure is not "offline": the network answered, the checkout is
+  # just as stale as it was, and behind_count below would compare it with an
+  # origin/<base> nobody refreshed — calling a stale tree current. Only a real
+  # network failure falls back to the local ref. GL_GIT_AUTH_FAILED is set only
+  # it stops with the login step (NEXT=, as commit-and-mr prints it). Either
+  # stops here unless --allow-stale says the stale base is accepted.
+  if ! gl_fetch "$ROOT/$repo" "$base" --quiet; then
+    if [ "${GL_GIT_AUTH_FAILED:-0}" = 1 ]; then
+      if [ "$FLAG_ALLOW_STALE" = 1 ] && [ "$FLAG_PULL" != 1 ]; then
+        warn "  --allow-stale: fetch refused (GitHub authentication) — branching off the local origin/$base, freshness unknown"
+      elif [ "${GL_GIT_LOGGED_OUT:-0}" = 1 ]; then
+        err "[$repo] fetch of origin/$base refused: GITHUB_TOKEN is missing for ${GL_TRANSPORT_HOST:-GitHub}"
+        err "  fix: $(gl_gh_login_hint "${GL_TRANSPORT_HOST:-}")"
+        err "  NEXT=${GL_NEXT:-}"
+        err "  then rerun; --allow-stale (without --pull) branches off the local ref anyway"
+        return 1
+      else
+        err "[$repo] fetch of origin/$base refused: GitHub authentication failed over HTTPS with GITHUB_TOKEN"
+        err "  fix: $(gl_no_transport_hint "${GL_TRANSPORT_HOST:-}")"
+        err "  then rerun; --allow-stale (without --pull) branches off the local ref anyway"
+        return 1
+      fi
+    else
+      warn "  fetch failed (offline?) — using local ref"
+    fi
+  fi
+
+  local startpoint
+  if git -C "$ROOT/$repo" show-ref --verify --quiet "refs/remotes/origin/${base}"; then
+    startpoint="origin/${base}"
+  elif git -C "$ROOT/$repo" show-ref --verify --quiet "refs/heads/${base}"; then
+    startpoint="$base"
+  else
+    err "[$repo] base branch '${base}' not found locally or on origin"; return 1
+  fi
+
+  # The rule that used to live in the docs as "always pull first", enforced.
+  local behind cur
+  behind="$(behind_count "$repo" "$base")"
+  if [ "$behind" -gt 0 ]; then
+    cur="$(git -C "$ROOT/$repo" branch --show-current 2>/dev/null || true)"
+    if [ "$FLAG_PULL" = 1 ] && [ "$cur" = "$base" ]; then
+      info "[$repo] packages/$repo is $behind commit(s) behind origin/$base — fast-forwarding"
+      git -C "$ROOT/$repo" merge --ff-only "origin/$base" --quiet \
+        || { err "[$repo] fast-forward failed (local commits or dirty tree?) — resolve it by hand"; return 1; }
+    elif [ "$FLAG_PULL" = 1 ]; then
+      err "[$repo] --pull: the checkout is on '${cur:-detached HEAD}', not the base branch '$base'"
+      err "  switch it (git -C packages/$repo checkout $base) or pass --allow-stale"
+      return 1
+    elif [ "$FLAG_ALLOW_STALE" = 1 ]; then
+      warn "  --allow-stale: packages/$repo is $behind commit(s) behind origin/$base — the cloned/linked deps and .env come from that old tree"
+    else
+      err "[$repo] packages/$repo is $behind commit(s) behind origin/$base"
+      err "  it is the branch point AND the source of the worktree's .env*/node_modules — update it first:"
+      err "    git -C packages/$repo pull        (or: --pull to do it here, --allow-stale to ignore)"
+      return 1
+    fi
+  fi
+
+  # Only now — an early return above must not leave an empty worktrees/<task>/.
+  mkdir -p "$(dirname "$wt_dir")"
+  info "[$repo] creating worktree ${wt_dir} on ${branch} (off ${startpoint})"
+  git -C "$ROOT/$repo" worktree add -b "$branch" "$wt_dir" "$startpoint" || return 1
+
+  setup_env "$repo" "$wt_dir"
+  setup_husky "$repo" "$wt_dir" || { err "[$repo] husky setup failed — worktree left at $wt_dir"; return 1; }
+  case "$(resolve_deps "$repo")" in
+    clone-modules)
+      clone_modules "$repo" "$wt_dir" || { err "[$repo] deps failed — worktree left at $wt_dir"; return 1; } ;;
+    link-modules)
+      link_modules "$repo" "$wt_dir"
+      [ "$FLAG_INSTALL" = 1 ] && warn "  --install ignored (using --link-modules)" || true ;;
+    install) run_install "$wt_dir" ;;
+    none)    info "  deps: none" ;;
+  esac
+  run_hooks "$repo" "$wt_dir" postSetup || { err "[$repo] postSetup failed — worktree left at $wt_dir"; return 1; }
+  info "[$repo] ready: $wt_dir"
+  return 0
+}
+
+cmd_new() {
+  parse_args "$@"
+  local task="${POS[0]:-}"
+  [ -n "$task" ] || { err "task name required"; usage; exit 1; }
+  local repos
+  repos="$(resolve_new_repos | add_always_manifest)" || exit 1
+  ensure_repos_for_new <<< "$repos" || exit 1
+  local ok="" bad="" r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    if new_one "$r" "$task"; then ok="$ok $r"; else bad="$bad $r"; fi
+  done <<< "$repos"
+  # Every repo failed (a stale checkout, say) — don't leave an empty task dir
+  # behind for `wt list` and `wt doctor` to report on.
+  [ -n "$ok" ] || rmdir "$WT_ROOT/$task" 2>/dev/null || true
+  echo
+  [ -n "$ok" ] && info "created:$ok  ->  $WT_ROOT/$task" || true
+  if [ -n "$bad" ]; then err "failed:$bad"; exit 1; fi
+  return 0
+}
+
+cmd_list() {
+  parse_args "$@"
+  if [ -n "$FLAG_REPOS" ]; then
+    local r
+    while IFS= read -r r; do
+      printf '%s== %s ==%s\n' "$c_grn" "$r" "$c_off"
+      git -C "$ROOT/$r" worktree list
+    done < <(flag_repos)
+    return 0
+  fi
+  # Grouped by the top-level task dir. What is printed per line is the path
+  # under it, so a nested task shows "03-wallets/api" rather than
+  # pretending the grouping directory is a repo.
+  local found=0 sub top cur_top="" d rel branch sha dirty coord_summary
+  while IFS= read -r sub; do
+    [ -n "$sub" ] || continue
+    found=1
+    top="${sub%%/*}"
+    if [ "$top" != "$cur_top" ]; then
+      printf '%s== %s ==%s\n' "$c_grn" "$top" "$c_off"
+      if [ -x "$COORD" ]; then
+        coord_summary="$($COORD summary --task "$top" 2>/dev/null || true)"
+        [ -n "$coord_summary" ] && printf '  %s\n' "$coord_summary"
+      fi
+      cur_top="$top"
+    fi
+    d="$WT_ROOT/$sub"
+    rel="${sub#"$top"/}"
+    branch="$(git -C "$d" branch --show-current 2>/dev/null || echo '?')"
+    sha="$(git -C "$d" rev-parse --short HEAD 2>/dev/null || echo '?')"
+    dirty=""
+    [ -n "$(git -C "$d" status --porcelain 2>/dev/null)" ] && dirty=" ${c_ylw}*${c_off}"
+    printf '  %-30s %-26s %s%s\n' "$rel" "$branch" "$sha" "$dirty"
+  done < <(wt_checkouts)
+  [ "$found" = 1 ] || info "no worktrees (see: $SELF new)"
+  return 0
+}
+
+# Resolve `rm --repo` values against the checkouts the task actually HAS, and
+# echo them as paths under worktrees/<task>/.
+#
+# A repo name is not a path here. A nested task keeps its checkouts at
+# worktrees/<task>/<sub>/<repo> — adopt.sh puts feature/<task>/<sub> there — so
+# worktrees/<task>/<name> need not exist, and flag_repos (which only validates
+# against packages/) cannot say where the checkout is. Each value is matched
+# against task_repos instead: first as an exact path, then by basename.
+#
+# Refuses when a value matches nothing, and when it matches SEVERAL checkouts:
+# one task can hold four steps of the same repo (offramp has four
+# api), and `--repo api` does not say which to delete. Removing
+# a checkout is destructive and unprompted, so the ambiguity is an error and the
+# sub-path resolves it.
+rm_repos() {
+  local task="$1" all="$2" v line hits n
+  while IFS= read -r v; do
+    [ -n "$v" ] || continue
+    hits=""; n=0
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      if [ "$line" = "$v" ]; then hits="$line"; n=1; break; fi
+      if [ "$(basename "$line")" = "$v" ]; then hits="${hits}${line}"$'\n'; n=$((n + 1)); fi
+    done <<< "$all"
+    if [ "$n" = 0 ]; then
+      err "task '$task' has no checkout of '$v' — it has:"
+      while IFS= read -r line; do [ -n "$line" ] && err "    $line"; done <<< "$all"
+      return 1
+    fi
+    if [ "$n" -gt 1 ]; then
+      err "'$v' matches $n checkouts of task '$task' — pass one of these to --repo:"
+      while IFS= read -r line; do [ -n "$line" ] && err "    $line"; done <<< "$hits"
+      err "  (or drop --repo to remove every repo of the task)"
+      return 1
+    fi
+    printf '%s\n' "${hits%$'\n'}"
+  done <<< "$FLAG_REPOS"
+}
+
+cmd_rm() {
+  parse_args "$@"
+  local task="${POS[0]:-}"
+  [ -n "$task" ] || { err "task name required"; usage; exit 1; }
+
+  if [ -x "$COORD" ] && ! "$COORD" guard-remove "$task"; then
+    err "task '$task' is still owned — finish/handoff the active session before removal"
+    exit 1
+  fi
+
+  case "$(pwd -P)/" in
+    "$WT_ROOT/$task/"*) err "you are inside $WT_ROOT/$task — cd out first"; exit 1 ;;
+  esac
+
+  local repos all
+  all="$(task_repos "$task")"
+  [ -n "$all" ] || { err "no worktrees for task '$task' under $WT_ROOT/$task"; exit 1; }
+  if [ -n "$FLAG_REPOS" ]; then
+    repos="$(rm_repos "$task" "$all")" || exit 1
+  else
+    repos="$all"
+    warn "no --repo given — removing every repo of task '$task': $(echo $repos | tr '\n' ' ')"
+  fi
+
+  local r repo wt_dir branch args bad=""
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    # $r is what sits under worktrees/<task>/ — a repo name, or "<sub>/<repo>"
+    # for a nested task. packages/ is keyed by the repo name alone.
+    repo="$(basename "$r")"
+    wt_dir="$(wt_path "$r" "$task")"
+    # Read the branch off the worktree instead of recomputing it from the
+    # prefix, so worktrees created under an older BRANCH_PREFIX still get their
+    # branch deleted. Falls back to the computed name if the tree is detached.
+    branch="$(git -C "$wt_dir" branch --show-current 2>/dev/null || true)"
+    [ -n "$branch" ] || branch="${BRANCH_PREFIX}${task}"
+    args=("$wt_dir"); [ "$FLAG_FORCE" = 1 ] && args=(--force "$wt_dir")
+    info "[$r] removing worktree $wt_dir"
+    if ! git -C "$ROOT/$repo" worktree remove "${args[@]}"; then bad="$bad $r"; continue; fi
+    if [ "$FLAG_DELBRANCH" = 1 ]; then
+      info "[$r] deleting branch $branch"
+      git -C "$ROOT/$repo" branch -D "$branch" || warn "  could not delete $branch"
+    fi
+    # A nested task leaves its grouping dir behind; drop it when it empties.
+    case "$r" in */*) rmdir "$(dirname "$wt_dir")" 2>/dev/null || true ;; esac
+  done <<< "$repos"
+
+  # Drop worktrees/<task>/ if it is now empty, and with it the grouping dirs
+  # above it — a nested task name ("11-travel-rule/pos") leaves two behind.
+  local up="$WT_ROOT/$task"
+  while [ "$up" != "$WT_ROOT" ] && rmdir "$up" 2>/dev/null; do up="$(dirname "$up")"; done
+  if [ -n "$bad" ]; then err "failed:$bad (dirty worktree? retry with --force)"; exit 1; fi
+  return 0
+}
+
+cmd_prune() {
+  parse_args "$@"
+  local repos r
+  if [ -n "$FLAG_REPOS" ]; then repos="$(flag_repos)"; else repos="$(all_repos)"; fi
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    printf '%s== %s ==%s\n' "$c_grn" "$r" "$c_off"
+    git -C "$ROOT/$r" worktree prune -v
+  done <<< "$repos"
+  return 0
+}
+
+# What `wt cleanup` makes of one checkout of a task, as one line:
+#   merged       its own commits are already in origin/<base>
+#   empty        it never had commits of its own (HEAD is where the branch began)
+#   keep <why>   anything else
+# "Already in" means HEAD is an ancestor of the target (merge, fast-forward), or
+# every commit of its own has an identical patch there (rebase, cherry-pick) —
+# `git cherry` marks those "-". Everything that cannot be proved keeps the
+# checkout: an unpushed commit, a squash merge, a dirty tree, a detached HEAD or
+# an operation in progress (the branch cmd_rm would delete was never checked),
+# and ignored files that are not rebuildable. Every unclear case keeps, because
+# what it would delete may exist nowhere else.
+cleanup_verdict() {
+  local task="$1" sub="$2" repo dir base target branch cherry own born p ignored=""
+  repo="$(basename "$sub")"
+  dir="$(wt_path "$sub" "$task")"
+  is_repo "$repo" || { echo "keep $sub: not a worktree of packages/ (clone-url?)"; return 0; }
+  [ "$(git_common_dir "$dir")" = "$(git_common_dir "$ROOT/$repo")" ] \
+    || { echo "keep $sub: not a worktree of packages/$repo"; return 0; }
+  [ -z "$(git -C "$dir" status --porcelain 2>/dev/null)" ] \
+    || { echo "keep $sub: uncommitted changes"; return 0; }
+  branch="$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)" \
+    || { echo "keep $sub: detached HEAD"; return 0; }
+  for p in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+    [ -e "$(git -C "$dir" rev-parse --git-path "$p")" ] \
+      && { echo "keep $sub: $p in progress"; return 0; }
+  done
+  while IFS= read -r p; do
+    p="${p#!! }"; p="${p%/}"
+    case "$(basename "$p")" in
+      node_modules|dist|build|coverage|.next|.turbo|__pycache__|.DS_Store|junit*.xml|*.tsbuildinfo|*.pyc) continue ;;
+      .env*) [ -L "$dir/$p" ] && continue ;;
+    esac
+    ignored="${ignored:+$ignored, }$p"
+  done < <(git -C "$dir" status --porcelain --ignored 2>/dev/null | grep '^!! ' || true)
+  [ -z "$ignored" ] || { echo "keep $sub: ignored files that would be lost: $ignored"; return 0; }
+  base="$(base_for "$repo")"; target="origin/$base"
+  git -C "$dir" rev-parse --verify --quiet "$target^{commit}" >/dev/null \
+    || { echo "keep $sub: no $target to compare with"; return 0; }
+  if ! git -C "$dir" merge-base --is-ancestor HEAD "$target"; then
+    cherry="$(git -C "$dir" cherry "$target" HEAD 2>/dev/null)" \
+      || { echo "keep $sub: git cherry against $target failed"; return 0; }
+    own="$(grep -c '^+' <<< "$cherry" || true)"
+    [ "$own" = 0 ] || { echo "keep $sub: $own commit(s) not in $target"; return 0; }
+  fi
+  # The oldest reflog entry of the branch is where `wt new` started it.
+  born="$(git -C "$dir" reflog show --format=%H "refs/heads/$branch" 2>/dev/null | tail -n 1)"
+  if [ -n "$born" ] && [ "$born" = "$(git -C "$dir" rev-parse HEAD)" ]; then
+    echo empty
+  else
+    echo merged
+  fi
+}
+
+git_common_dir() {
+  (cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P) || true
+}
+
+cmd_cleanup() {
+  parse_args "$@"
+  local todo=() t
+  if [ ${#POS[@]} -gt 0 ]; then
+    todo=("${POS[@]}")
+  else
+    while IFS= read -r t; do [ -n "$t" ] && todo+=("$t"); done \
+      < <(wt_checkouts | sed 's|/[^/]*$||' | sort -u)
+  fi
+  [ ${#todo[@]} -gt 0 ] || { info "no worktrees to clean"; return 0; }
+
+  # A task is the directory holding its checkouts: "fix-x" for
+  # worktrees/fix-x/api, "nest/a" for adopt.sh's worktrees/nest/a/api, so each
+  # nested branch is judged on its own.
+  # One fetch per repo, not per checkout: tasks share repos, and the answer is
+  # only as fresh as origin/<base>. A failed fetch leaves an older target, which
+  # can only make a task look LESS merged, so it warns instead of stopping.
+  local fetched=$'\n' task sub repo base subs reasons r worked removed=0 kept=0 bad=""
+  if [ "$FLAG_NO_FETCH" = 0 ]; then
+    for task in "${todo[@]}"; do
+      safe_task_path "$task" || continue
+      while IFS= read -r sub; do
+        [ -n "$sub" ] || continue
+        repo="$(basename "$sub")"
+        case "$fetched" in *$'\n'"$repo"$'\n'*) continue ;; esac
+        fetched="${fetched}${repo}"$'\n'
+        is_repo "$repo" || continue
+        base="$(base_for "$repo")"
+        gl_use_repo "$repo"
+        gl_fetch "$ROOT/$repo" "$base" --quiet >/dev/null 2>&1 \
+          || warn "[$repo] could not fetch origin/$base — comparing with the local copy"
+      done < <(task_repos "$task")
+    done
+  fi
+
+  for task in "${todo[@]}"; do
+    safe_task_path "$task" || { err "bad task name: $task"; bad="$bad $task"; continue; }
+    subs="$(task_repos "$task")"
+    if [ -z "$subs" ]; then
+      printf 'keep   %s — no checkouts under %s\n' "$task" "$WT_ROOT/$task"
+      kept=$((kept + 1)); continue
+    fi
+    reasons=""
+    if [ -x "$COORD" ] && ! "$COORD" guard-remove "$task" 2>/dev/null; then
+      reasons="owned by an active coordination lease"
+    fi
+    case "$(pwd -P)/" in
+      "$WT_ROOT/$task/"*) reasons="${reasons:+$reasons; }current directory is inside it" ;;
+    esac
+    if [ -z "$reasons" ]; then
+      # A checkout with no commits of its own (the "always" specs repo of a
+      # product task) does not hold the task back, but a task where NO
+      # checkout ever committed is a fresh one, not a finished one.
+      worked=0
+      while IFS= read -r sub; do
+        [ -n "$sub" ] || continue
+        r="$(cleanup_verdict "$task" "$sub")"
+        case "$r" in
+          merged) worked=1 ;;
+          empty) ;;
+          *) reasons="${reasons:+$reasons; }${r#keep }" ;;
+        esac
+      done <<< "$subs"
+      [ -n "$reasons" ] || [ "$worked" = 1 ] || reasons="nothing committed yet"
+    fi
+    if [ -n "$reasons" ]; then
+      printf 'keep   %s — %s\n' "$task" "$reasons"
+      kept=$((kept + 1)); continue
+    fi
+    if [ "$FLAG_DRY_RUN" = 1 ]; then
+      info "would remove $task ($(paste -sd' ' - <<< "$subs"))"
+      removed=$((removed + 1)); continue
+    fi
+    info "remove $task"
+    if ( cmd_rm "$task" --delete-branch ); then
+      removed=$((removed + 1))
+    else
+      bad="$bad $task"
+    fi
+  done
+
+  local verb=removed; [ "$FLAG_DRY_RUN" = 1 ] && verb="would remove"
+  info "$verb: $removed, kept: $kept"
+  if [ -n "$bad" ]; then err "failed:$bad"; exit 1; fi
+  return 0
+}
+
+cmd_repos() {
+  local r url
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    url="$(git -C "$ROOT/$r" remote get-url origin 2>/dev/null || echo '(no origin)')"
+    printf '%-32s %-14s %s\n' "$r" "$(base_for "$r")" "$url"
+  done < <(all_repos)
+  if has_manifest && command -v jq >/dev/null 2>&1; then
+    local missing
+    missing="$(comm -23 <(manifest_repos | sort) <(all_repos | sort) | tr '\n' ' ')"
+    [ -n "${missing// /}" ] && warn "in repos.json but not on disk: ${missing% } (run: $SELF clone)" || true
+  fi
+  return 0
+}
+
+# ------------------------------------------------------------------ doctor ----
+
+# Everything the docs used to ask you to remember, as a check that fails loudly.
+# Exits non-zero when it finds a real problem; notes are warnings and don't.
+# `wt pull` — fast-forward the main checkout(s) to origin/<base>.
+#
+# Track A answers questions from packages/<repo>, and an answer read off a tree
+# that is fifty commits behind is wrong in the one way nobody catches: it looks
+# right. So the pull is a command of its own rather than a sentence in the docs.
+#
+# Fast-forward only, and never a fix-up: a checkout with local commits, a dirty
+# tree or a non-base branch is REPORTED and skipped. Stashing or resetting
+# someone's work in packages/ to answer a question is not a trade this script
+# gets to make.
+cmd_pull() {
+  parse_args "$@"
+  need_manifest
+  local r base cur behind dirty pulled="" already="" skipped=0
+
+  # `--repo x`, bare names (`wt pull api signer`), the repo cwd is in,
+  # or — only when asked for by name — every repo. The default is deliberately
+  # NOT everything: a question is about one or two repos, and fetching ten to
+  # answer it is a minute of nothing.
+  local names
+  if [ -n "$FLAG_REPOS" ]; then names="$(flag_repos)"
+  elif [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" = "all" ]; then names="$(manifest_repos)"
+  elif [ "${#POS[@]}" -gt 0 ]; then names="$(printf '%s\n' "${POS[@]}")"
+  else names="$(resolve_repos)"; fi
+
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    if is_excluded "$r"; then continue; fi
+    if [ ! -d "$ROOT/$r" ] || ! is_repo "$r"; then
+      err "[$r] not a git repo under packages/ — run: $SELF clone $r"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    base="$(base_for "$r")"
+
+    if [ "$FLAG_NO_FETCH" != 1 ]; then
+      gl_use_repo "$r"
+      gl_fetch "$ROOT/$r" "$base" --quiet >/dev/null 2>&1 \
+        || warn "[$r] fetch failed (offline?) — comparing against the last known origin/$base"
+    fi
+
+    behind="$(behind_count "$r" "$base")"
+
+    if [ "$behind" -eq 0 ]; then
+      already="$already $r"
+      continue
+    fi
+
+    cur="$(git -C "$ROOT/$r" branch --show-current 2>/dev/null || true)"
+    if [ "$cur" != "$base" ]; then
+      err "[$r] $behind behind origin/$base, but the checkout is on '${cur:-detached HEAD}'"
+      err "    switch it first: git -C packages/$r checkout $base"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    dirty="$(git -C "$ROOT/$r" status --porcelain 2>/dev/null | head -1)"
+    if [ -n "$dirty" ]; then
+      err "[$r] $behind behind origin/$base, but the tree is dirty — not touching it"
+      err "    look at it: git -C packages/$r status"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    # Announced after the fact, not before: a "fast-forwarding…" line followed by
+    # a refusal reads as though something happened.
+    if git -C "$ROOT/$r" merge --ff-only "origin/$base" --quiet 2>/dev/null; then
+      info "[$r] fast-forwarded $behind commit(s) to origin/$base"
+      pulled="$pulled $r"
+    else
+      err "[$r] fast-forward refused — local commits on $base? resolve it by hand"
+      err "    git -C packages/$r log --oneline origin/$base..HEAD"
+      skipped=$((skipped + 1))
+    fi
+  done <<< "$names"
+
+  echo
+  [ -n "$pulled" ] && info "pulled:$pulled" || true
+  [ -n "$already" ] && info "already current:$already" || true
+
+  # A skipped repo means the tree you are about to read is NOT what origin has.
+  # Exit non-zero so a caller cannot treat a partial pull as a done one.
+  if [ "$skipped" -gt 0 ]; then
+    err "$skipped repo(s) left behind origin — an answer read off them is stale"
+    exit 1
+  fi
+  return 0
+}
+
+# Install node_modules in packages/<repo> — the tree every worktree's
+# copy-on-write clone comes from. Idempotent by design: a repo that already has
+# one is SKIPPED, never reinstalled, because the only reason to run an install
+# here is that there is nothing to clone from. --force reinstalls anyway.
+cmd_seed() {
+  parse_args "$@"
+  need_manifest
+  local r seeded="" already="" nothing="" failed=""
+  local names
+  if [ -n "$FLAG_REPOS" ]; then names="$(flag_repos)"
+  elif [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" = "all" ]; then names="$(manifest_repos)"
+  elif [ "${#POS[@]}" -gt 0 ]; then names="$(printf '%s\n' "${POS[@]}")"
+  else names="$(resolve_repos)"; fi
+
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    is_excluded "$r" && continue
+    if [ ! -d "$ROOT/$r" ]; then
+      err "[$r] not under packages/ — run: $SELF clone $r"
+      failed="$failed $r"
+      continue
+    fi
+    if [ ! -f "$ROOT/$r/package.json" ]; then nothing="$nothing $r"; continue; fi
+    if [ -n "$(repo_modules_dirs "$r")" ] && [ "$FLAG_FORCE" != 1 ]; then
+      already="$already $r"
+      continue
+    fi
+    info "[$r] seeding node_modules in packages/$r"
+    if run_install "$ROOT/$r"; then seeded="$seeded $r"; else failed="$failed $r"; fi
+  done <<< "$names"
+
+  echo
+  [ -n "$seeded" ]  && info "seeded:$seeded" || true
+  [ -n "$already" ] && info "already had node_modules (skipped):$already" || true
+  [ -n "$nothing" ] && info "no package.json:$nothing" || true
+  if [ -n "$failed" ]; then err "failed:$failed"; exit 1; fi
+  return 0
+}
+
+cmd_doctor() {
+  parse_args "$@"
+  need_manifest
+  local problems=0 r base behind cur rel link line d repo branch
+  # --repo narrows both sections; empty means every repo / every worktree.
+  local want=""
+  if [ -n "$FLAG_REPOS" ]; then want=" $(flag_repos | tr '\n' ' ')"; fi
+
+  printf '%s== packages/ ==%s\n' "$c_grn" "$c_off"
+  local miss
+  miss="$(comm -23 <(manifest_repos | sort) <(all_repos | sort) | tr '\n' ' ')"
+  if [ -n "${miss// /}" ]; then
+    err "  in repos.json but not on disk: ${miss% }"
+    err "    fix: $SELF clone ${miss% }"
+    problems=$((problems + 1))
+  fi
+
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    if is_excluded "$r"; then continue; fi
+    base="$(base_for "$r")"
+    if [ "$FLAG_NO_FETCH" != 1 ]; then
+      gl_use_repo "$r"
+      gl_fetch "$ROOT/$r" "$base" --quiet >/dev/null 2>&1 \
+        || warn "  [$r] fetch failed (offline?) — comparing against the last known origin/$base"
+    fi
+    behind="$(behind_count "$r" "$base")"
+    if [ "$behind" -gt 0 ]; then
+      err "  [$r] $behind commit(s) behind origin/$base — wt new will refuse until it is pulled"
+      err "    fix: $SELF pull --repo $r"
+      problems=$((problems + 1))
+    fi
+    cur="$(git -C "$ROOT/$r" branch --show-current 2>/dev/null || true)"
+    if [ -n "$cur" ] && [ "$cur" != "$base" ]; then
+      warn "  [$r] checkout sits on '$cur', not the base branch '$base' — note, not an error"
+    fi
+    # The clone/link strategies both copy from this tree's node_modules. Without
+    # it the first worktree has to install from scratch — worth knowing before
+    # `wt new` sits there for minutes.
+    case "$(resolve_deps "$r")" in
+      clone-modules|link-modules)
+        if [ -f "$ROOT/$r/package.json" ] && [ -z "$(repo_modules_dirs "$r")" ]; then
+          warn "  [$r] no node_modules in packages/$r — the next wt new installs there once"
+          warn "    (seeded automatically; do it now with '$SELF seed --repo $r' to pay it outside a task)"
+        fi ;;
+    esac
+    # Registrations whose directory is gone. Counted, not listed — a repo worked
+    # on for a while accumulates dozens and the list buries everything else.
+    local stale=0
+    while IFS= read -r line; do
+      case "$line" in prunable*) stale=$((stale + 1)) ;; esac
+    done < <(git -C "$ROOT/$r" worktree list --porcelain)
+    if [ "$stale" -gt 0 ]; then
+      warn "  [$r] $stale stale worktree registration(s) (fix: $SELF prune --repo $r)"
+    fi
+  done < <(if [ -n "$FLAG_REPOS" ]; then flag_repos; else all_repos; fi)
+
+  printf '%s== worktrees/ ==%s\n' "$c_grn" "$c_off"
+  # Every checkout at whatever depth, not just worktrees/<task>/<repo> — a
+  # nested task name (adopt.sh, feature/<task>/<sub>) puts one a level deeper,
+  # and the old two-level scan reported its grouping directory as a repo that
+  # packages/ does not have. $sub is the label AND the path; the repo name is
+  # its last component.
+  local checked=0 tasks=0 sub top seen_tasks=""
+  while IFS= read -r sub; do
+      [ -n "$sub" ] || continue
+      d="$WT_ROOT/$sub/"
+      repo="$(basename "$sub")"
+      if [ -n "$want" ]; then case "$want" in *" $repo "*) ;; *) continue ;; esac; fi
+      checked=$((checked + 1))
+      top="${sub%%/*}"
+      case " $seen_tasks " in
+        *" $top "*) ;;
+        *) seen_tasks="$seen_tasks $top"; tasks=$((tasks + 1)) ;;
+      esac
+
+      # A symlink whose target is gone: .env deleted in packages/, or a
+      # node_modules the main checkout no longer has.
+      if [ -L "${d}node_modules" ] && [ ! -e "${d}node_modules" ]; then
+        err "  [$sub] node_modules symlink is broken (target gone from packages/$repo)"
+        err "    fix: rm ${d}node_modules, then reinstall in packages/$repo (or recreate with --install)"
+        problems=$((problems + 1))
+      fi
+      while IFS= read -r link; do
+        [ -n "$link" ] || continue
+        err "  [$sub] broken symlink: ${link#"$d"}"
+        problems=$((problems + 1))
+      done < <(find -L "$d" -maxdepth 6 \
+                 \( -name node_modules -o -name .git -o -name .dart_tool -o -name Pods \
+                    -o -name build -o -name dist \) -prune \
+                 -o -type l -print 2>/dev/null)
+
+      # .env* added to packages/<repo> after this worktree was created.
+      if [ -d "$ROOT/$repo" ] && is_repo "$repo"; then
+        while IFS= read -r rel; do
+          [ -n "$rel" ] || continue
+          if [ -e "$d$rel" ]; then continue; fi
+          warn "  [$sub] missing $rel (added to packages/$repo after wt new)"
+          warn "    fix: ln -s $ROOT/$repo/$rel $d$rel"
+        done < <(repo_env_files "$repo")
+        if [ -d "$ROOT/$repo/.husky/_" ] && [ ! -e "$d.husky/_" ]; then
+          warn "  [$sub] missing .husky/_ (added to packages/$repo after wt new)"
+          warn "    fix: cp -R $ROOT/$repo/.husky/_ $d.husky/_"
+        fi
+      else
+        err "  [$sub] no matching repo in packages/ — nothing to take .env*/deps from"
+        problems=$((problems + 1))
+      fi
+
+      branch="$(git -C "$d" branch --show-current 2>/dev/null || true)"
+      case "$branch" in
+        "$BRANCH_PREFIX"*) ;;
+        "") warn "  [$sub] detached HEAD — no branch to commit to" ;;
+        *)  warn "  [$sub] branch '$branch' is outside the ${BRANCH_PREFIX}<task> scheme — note only" ;;
+      esac
+  done < <(wt_checkouts)
+  if [ "$checked" = 0 ]; then
+    info "  no worktrees${want:+ for:${want% }}"
+  else
+    info "  checked $checked checkout(s) across $tasks task(s)"
+  fi
+
+  if [ -x "$COORD" ]; then
+    "$COORD" doctor || problems=$((problems + 1))
+  fi
+
+  echo
+  if [ "$problems" = 0 ]; then
+    info "doctor: no problems found"
+    return 0
+  fi
+  err "doctor: $problems problem(s)"
+  exit 1
+}
+
+# ---------------------------------------------------------------- bootstrap ---
+
+clone_one() {
+  local name="$1" url
+  url="$(manifest_get "$name" url)"
+  if [ -z "$url" ]; then err "[$name] no \"url\" in repos.json"; return 1; fi
+  if [ -e "$ROOT/$name" ]; then info "[$name] already present — skipped"; return 0; fi
+  ensure_repo "$name" || return 1
+  run_hooks "$name" "$ROOT/$name" postClone || { err "[$name] postClone failed"; return 1; }
+  # `wt clone` does NOT install by default — 9 repos of node_modules is a long
+  # wait you probably want to control. --install does it in the main checkout,
+  # which is what every later `wt new` clones its deps from.
+  if [ "$FLAG_INSTALL" = 1 ]; then run_install "$ROOT/$name"; fi
+  return 0
+}
+
+cmd_clone() {
+  parse_args "$@"
+  need_manifest
+  local names="" explicit=1 n
+  if [ -n "$FLAG_REPOS" ]; then names="$FLAG_REPOS"
+  elif [ "${#POS[@]}" -gt 0 ]; then names="$(printf '%s\n' "${POS[@]}")"
+  else names="$(manifest_repos)"; explicit=0; fi
+
+  local ok="" bad="" skipped=""
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    if [ "$explicit" = 0 ] && is_excluded "$n"; then skipped="$skipped $n"; continue; fi
+    if clone_one "$n"; then ok="$ok $n"; else bad="$bad $n"; fi
+  done <<< "$names"
+  echo
+  [ -n "$skipped" ] && warn "excluded:$skipped" || true
+  [ -n "$ok" ] && info "ok:$ok" || true
+  if [ -n "$bad" ]; then err "failed:$bad"; exit 1; fi
+  return 0
+}
+
+# ---------------------------------------------------------------- one-off ----
+
+safe_task_path() {
+  local value="$1" part
+  local -a parts
+  case "$value" in ""|/*|./*|../*|*/../*|*/..|*/./*|*'//'*) return 1 ;; esac
+  IFS=/ read -r -a parts <<< "$value"
+  for part in "${parts[@]}"; do
+    case "$part" in ""|.|..|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  done
+}
+
+safe_checkout_name() { case "$1" in ""|.|..|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
+
+cmd_clone_url() {
+  local task="${1:-}" url="${2:-}" name="" task_branch=0
+  shift $(( $# >= 2 ? 2 : $# ))
+  [ -n "$task" ] && [ -n "$url" ] || { err "usage: $SELF clone-url <task> <git-url> [--name <name>] [--task-branch]"; exit 1; }
+  safe_task_path "$task" || { err "unsafe task path: $task"; exit 1; }
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) name="${2:-}"; [ -n "$name" ] || { err "--name needs a value"; exit 1; }; shift 2 ;;
+      --task-branch) task_branch=1; shift ;;
+      *) err "unknown clone-url option: $1"; exit 1 ;;
+    esac
+  done
+  [ -n "$name" ] || name="${url%/}"; name="${name##*/}"; name="${name##*:}"; name="${name%.git}"
+  safe_checkout_name "$name" || { err "cannot derive a safe checkout name; pass --name"; exit 1; }
+  local dest="$WT_ROOT/$task/$name"
+  if [ -e "$dest" ]; then
+    [ "$task_branch" = 1 ] || { err "path already exists: $dest"; exit 1; }
+    git -C "$dest" rev-parse --git-dir >/dev/null 2>&1 || { err "not a git checkout: $dest"; exit 1; }
+    local stored want have
+    stored="$(git -C "$dest" config --get remote.origin.url || true)"
+    want="$(gl_https_url "$url")"; have="$(gl_https_url "$stored")"
+    [ "${want%.git}" = "${have%.git}" ] || { err "existing checkout origin differs from requested URL"; exit 1; }
+  else
+    mkdir -p "$(dirname "$dest")"
+    gl_use "$(gl_host_from_url "$url" 2>/dev/null || true)"
+    gl_clone "$url" "$dest" || { err "[$name] clone failed; any partial directory was left at $dest"; exit 1; }
+  fi
+  if [ "$task_branch" = 1 ]; then
+    local branch="${BRANCH_PREFIX}${task}" current default base
+    [ -z "$(git -C "$dest" status --porcelain)" ] || { err "existing checkout has uncommitted changes; task branch not created"; exit 1; }
+    current="$(git -C "$dest" branch --show-current)"
+    if [ "$current" != "$branch" ]; then
+      default="$(git -C "$dest" symbolic-ref --quiet --short refs/remotes/origin/HEAD || true)"
+      default="${default#origin/}"
+      base="$(harness_base_branch "$SCRIPT_DIR")"
+      [ -n "$current" ] && { [ "$current" = "$default" ] || [ "$current" = "$base" ]; } \
+        || { err "refusing to switch foreign or detached branch: ${current:-detached}"; exit 1; }
+      git -C "$dest" switch -c "$branch" || { err "task branch already exists or cannot be created; refusing to reset it"; exit 1; }
+    fi
+  fi
+  info "[$name] ready: $dest (not added to repos.json)"
+}
+
+# Rewrite repos.json from what's on disk. url/branch come from the checkout;
+# hand-written fields (deps, postClone, postSetup, exclude) are preserved.
+cmd_manifest() {
+  need_jq
+  local disc='{}' r url branch known added="" updated="" conflicts=""
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    if is_excluded "$r"; then warn "skip $r (in .exclude)"; continue; fi
+    url="$(git -C "$ROOT/$r" remote get-url origin 2>/dev/null || true)"
+    [ -n "$url" ] || { warn "skip $r (no origin remote)"; continue; }
+    branch="$(default_base "$r" refresh)"
+
+    # An existing "branch" is NEVER overwritten. It is the MR target and the base
+    # every worktree forks from — reviewed, and deliberately allowed to differ
+    # from the remote's default. Silently replacing it here once turned
+    # web-cabinet's base from `development` into `main`, which
+    # would have sent its MRs at the wrong branch and, because commit-and-mr
+    # matches an existing MR by source→target, opened a second MR for work
+    # already under review. A disagreement is reported for a human to settle.
+    known=""
+    if has_manifest; then known="$(manifest_get "$r" branch)"; fi
+
+    if [ -n "$known" ]; then
+      if [ "$known" != "$branch" ]; then
+        conflicts="$conflicts $r"
+        warn "[$r] repos.json says base '$known', origin's default is '$branch' — KEEPING '$known'"
+      fi
+      branch="$known"
+    fi
+
+    if has_manifest && [ -n "$(manifest_get "$r" url)" ]; then updated="$updated $r"; else added="$added $r"; fi
+    disc="$(jq --arg n "$r" --arg u "$url" --arg b "$branch" \
+              '.[$n] = {url: $u, branch: $b}' <<< "$disc")"
+  done < <(all_repos)
+
+  local tmp="$MANIFEST.tmp.$$"
+  if has_manifest; then
+    jq -S --argjson d "$disc" '.repos = ((.repos // {}) * $d)' "$MANIFEST" > "$tmp"
+  else
+    jq -S -n --argjson d "$disc" '{exclude: [], repos: $d}' > "$tmp"
+  fi
+  mv "$tmp" "$MANIFEST"
+
+  [ -n "$added" ]   && info "added:$added" || true
+  [ -n "$updated" ] && info "refreshed url:$updated" || true
+  if [ -n "$conflicts" ]; then
+    warn "base branch disagrees with origin for:$conflicts"
+    warn "  repos.json was kept. If origin is right, edit the \"branch\" there by hand —"
+    warn "  it decides where every MR of that repo targets."
+  fi
+  info "wrote $MANIFEST"
+  return 0
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  new)      cmd_new "$@" ;;
+  list)     cmd_list "$@" ;;
+  rm)       cmd_rm "$@" ;;
+  prune)    cmd_prune "$@" ;;
+  cleanup)  cmd_cleanup "$@" ;;
+  repos)    cmd_repos ;;
+  pull)     cmd_pull "$@" ;;
+  seed)     cmd_seed "$@" ;;
+  doctor)   cmd_doctor "$@" ;;
+  clone)    cmd_clone "$@" ;;
+  clone-url) cmd_clone_url "$@" ;;
+  manifest) cmd_manifest ;;
+  ""|-h|--help|help) usage ;;
+  *) err "unknown command: $cmd"; usage; exit 1 ;;
+esac

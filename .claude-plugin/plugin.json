@@ -1,0 +1,10 @@
+{
+  "name": "karamel",
+  "version": "0.1.0",
+  "description": "Создаёт и обновляет агентские воркспейсы по образцу bulka: правила, скиллы, роли, хуки, ops и worktree-раскладка.",
+  "author": {
+    "name": "Dionid"
+  },
+  "repository": "https://github.com/Dionid/karamel",
+  "license": "UNLICENSED"
+}

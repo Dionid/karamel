@@ -1,0 +1,32 @@
+name: Harness checks
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    container: node:22-bookworm-slim
+    steps:
+      - name: Install harness tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bash git python3 jq shellcheck tzdata curl ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Trust checkout inside container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install pinned Markdown linter
+        run: npm i -g markdownlint-cli2@0.23.2
+      - name: Check harness and Markdown
+        run: bash agents/common/skills/lint/lint.sh --require-tools

@@ -1,0 +1,36 @@
+name: Test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  new-workspace:
+    runs-on: ubuntu-latest
+    container: node:22-bookworm-slim
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bash git python3 jq shellcheck tzdata curl ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Trust checkout inside container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install pinned Markdown linter
+        run: npm i -g markdownlint-cli2@0.23.2
+      - name: Shellcheck karamel scripts
+        run: shellcheck -S warning skills/new-workspace/new-workspace.sh tests/new-workspace.test.sh
+      - name: Markdown
+        run: markdownlint-cli2
+      - name: Create, lint and upgrade a workspace
+        run: LINT_ARGS=--require-tools bash tests/new-workspace.test.sh
