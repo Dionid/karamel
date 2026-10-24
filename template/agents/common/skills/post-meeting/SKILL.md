@@ -12,8 +12,8 @@ description: Из транскрипта встречи (последняя за
 
 Перед чтением/записью командных материалов разрешите `<knowledge-repo>` и
 `<knowledge-root>` через skill **`knowledge`**, затем командный knowledge-skill.
-Все `knowledge/...` пути ниже обозначают категории внутри этого resolved root,
-а не каталог в workspace или фиксированный корень checkout.
+Все пути ниже считаются от `<knowledge-root>/` выбранного checkout;
+при `knowledgeRoot: "."` это корень репозитория.
 Заметка идёт в `<knowledge-root>/meetings/` выбранного task-worktree. Отсутствующий checkout не создаёт локальный fallback.
 
 ## Триггер
@@ -117,13 +117,13 @@ python3 .claude/skills/post-meeting/scripts/transcript-loop-check.py <путь-�
 
 ### Шаг 2 — Сохранить артефакты
 
-1. **Заметка встречи**: `knowledge/meetings/YYYY-MM-DD-короткий-слаг.md` —
+1. **Заметка встречи**: `<knowledge-root>/meetings/YYYY-MM-DD-короткий-слаг.md` —
    контекст, решения, задачи, открытые вопросы.
 2. **Решения**: если решение долговременное — отдельный файл в
-   `knowledge/decisions/` (дата, причина, статус «действует»), не только
+   `<knowledge-root>/decisions/` (дата, причина, статус «действует»), не только
    строка в заметке встречи.
 3. **Сырой транскрипт**: сохранить рядом (например
-   `knowledge/meetings/transcripts/YYYY-MM-DD-слаг.txt`), не переписывать —
+   `<knowledge-root>/meetings/transcripts/YYYY-MM-DD-слаг.txt`), не переписывать —
    это запись того, что было сказано.
 
 ### Шаг 3 — Черновик сообщения (если нужен)
@@ -142,7 +142,7 @@ python3 .claude/skills/post-meeting/scripts/transcript-loop-check.py <путь-�
 
 Если пользователь позже прислал финальный текст (то, что он на самом деле
 отправил, поправив черновик) — это ground truth, и он может расходиться с
-тем, что уже записано в `knowledge/meetings/` и `knowledge/decisions/`.
+тем, что уже записано в `<knowledge-root>/meetings/` и `<knowledge-root>/decisions/`.
 
 Разошедшееся делится на два вида, и путать их нельзя:
 

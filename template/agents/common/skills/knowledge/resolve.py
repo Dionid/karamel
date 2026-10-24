@@ -11,7 +11,7 @@ def relative_root(value):
     if not isinstance(value, str) or not value or "\\" in value:
         raise ValueError("knowledgeRoot must be a nonempty relative POSIX path")
     path = Path(value)
-    if path.is_absolute() or ".." in path.parts or path == Path("."):
+    if path.is_absolute() or ".." in path.parts or (path == Path(".") and value != "."):
         raise ValueError(f"unsafe knowledgeRoot: {value!r}")
     return path.as_posix()
 
@@ -33,7 +33,8 @@ def resolve(workspace, task_dir=None, allow_missing=False):
         checkout = Path(task_dir) / name if task_dir else workspace / "packages" / name
         marker = checkout / root
         if checkout.exists():
-            if marker.resolve() == checkout.resolve() or not marker.resolve().is_relative_to(checkout.resolve()):
+            if ((root != "." and marker.resolve() == checkout.resolve())
+                    or not marker.resolve().is_relative_to(checkout.resolve())):
                 raise ValueError(f"knowledgeRoot escapes checkout: {name}/{root}")
             if marker.is_dir():
                 hits.append({"repo": name, "root": root, "url": entry.get("url", ""),

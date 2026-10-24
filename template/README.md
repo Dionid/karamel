@@ -124,7 +124,7 @@ npm run ops -- lint strict
 | Скилл | О чём |
 | --- | --- |
 | `build-loop` | трек C: волны билдеров, барьер ревью, ограниченные раунды исправлений |
-| `knowledge` | кто, когда и в какую категорию `knowledge/` пишет через task-worktree |
+| `knowledge` | кто, когда и в какую категорию `<knowledge-root>/` пишет через task-worktree |
 | `spec` | точная маршрутизация OpenSpec-артефактов в spec-root задачи |
 | `openspec-read` | чтение текущих OpenSpec specs/changes без grep по markdown |
 | `spec-trace` | связь спеки и кода из git + coordination: `trace.sh`, `spec-ref.sh` |
