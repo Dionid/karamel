@@ -71,6 +71,26 @@ GitHub-транспорт использует общую библиотеку `
   кроме положения ветки корня;
 - не правит файлы — правка агентского слоя идёт через `wt` и `writing-skills`.
 
+## Общий слой из upstream
+
+`self-update` подтягивает свежий слой из origin самого воркспейса. Если
+воркспейс создан из upstream-генератора (поле `upstream` в `workspace.json`,
+например karamel), общий слой правится там, а сюда приезжает отдельной
+командой:
+
+```bash
+./ops upgrade --dry-run   # что изменится
+./ops upgrade             # перезаписать общий слой
+```
+
+Она кладёт свежий upstream в `.agent-tools/upstream` и запускает его
+`skills/new-workspace/new-workspace.sh upgrade`: `agents/`, `ops`, `docs/`, CI
+и общие доки перезаписываются, командные файлы (`repos.json`, `workspace.json`,
+`PACKAGES.md`, `README.md`, `notion.json`, `CODEOWNERS`, `IDENTITY.md`,
+`SOUL.md`, `AGENTS.md`, `.env.example`) не трогаются. В отличие от
+`self-update`, это правка tracked-файлов: её делают в task-worktree этого
+репозитория и закрывают обычным PR, а не в корневом чекауте.
+
 ## Отчёт
 
 Пересказывайте то, что напечатал скрипт, а не ожидание от него:

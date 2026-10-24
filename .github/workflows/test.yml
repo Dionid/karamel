@@ -33,4 +33,4 @@ jobs:
       - name: Markdown
         run: markdownlint-cli2
       - name: Create, lint and upgrade a workspace
-        run: LINT_ARGS=--require-tools bash tests/new-workspace.test.sh
+        run: FULL_LINT=1 LINT_ARGS=--require-tools bash tests/new-workspace.test.sh

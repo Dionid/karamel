@@ -96,7 +96,9 @@ with tempfile.TemporaryDirectory(prefix="runtime-build-test-") as raw:
     doc_limit = re.search(r"^project_doc_max_bytes = (\d+)$", codex, re.M)
     assert doc_limit and int(doc_limit.group(1)) > 32 * 1024
     assert doc_limit.start() < codex.index("\n[")
-    assert json.loads((root / "harness.json").read_text())["team"] == "Team"
+    # harness.json mirrors the workspace's own manifest, whatever team it names.
+    expected_team = json.loads((SOURCE / "workspace.json").read_text())["team"]
+    assert json.loads((root / "harness.json").read_text())["team"] == expected_team
 
     (root / ".codex/config.toml").write_text("drift\n")
     check = subprocess.run([str(build), "check"], cwd=root, capture_output=True)

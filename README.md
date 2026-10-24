@@ -49,10 +49,18 @@ new-workspace.sh create ~/work/acme --team Acme \
 
 ## Обновить воркспейс
 
+karamel — upstream для созданных воркспейсов: `create` пишет его адрес в
+`workspace.json` (`upstream`, `upstreamRef`). В самом воркспейсе:
+
 ```bash
-new-workspace.sh upgrade ~/work/acme --dry-run
-new-workspace.sh upgrade ~/work/acme
+./ops upgrade --dry-run
+./ops upgrade
 ```
+
+`./ops upgrade` кладёт свежий karamel в `.agent-tools/upstream` (через
+`GITHUB_TOKEN`, как и остальной git-транспорт воркспейса) и запускает
+`new-workspace.sh upgrade`. Тот же скрипт можно вызвать и напрямую:
+`new-workspace.sh upgrade ~/work/acme`.
 
 Общий слой перезаписывается из `template/`, удалённые из шаблона файлы в
 `agents/` и `docs/` удаляются. Командные файлы (`repos.json`,
@@ -65,4 +73,5 @@ new-workspace.sh upgrade ~/work/acme
 [bulka#7](https://github.com/Dionid/bulka/pull/7). Командные файлы bulka
 (`repos.json`, `PACKAGES.md`, строка в `README.md`) сброшены к пустым.
 Общий слой правится здесь, в `template/`, и раздаётся воркспейсам через
-`upgrade`.
+`./ops upgrade`. Правка `agents/` прямо в воркспейсе будет перезаписана
+следующим upgrade.
