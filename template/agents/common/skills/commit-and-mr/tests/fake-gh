@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Offline gh double: real pr flags/JSON, required mirrored-token authentication.
+set -euo pipefail
+state="${FAKE_GH_STATE:?FAKE_GH_STATE is not set}"
+[[ -n "${GITHUB_TOKEN-}" && "${GH_TOKEN-}" == "$GITHUB_TOKEN" ]] || { echo 'token boundary mismatch' >&2; exit 90; }
+[[ "${GH_PROMPT_DISABLED-}" == 1 && "${GH_HOST-}" == github.com ]] || exit 91
+mkdir -p "$state"
+mrs="$state/mrs.json"
+[[ -f "$mrs" ]] || printf '[]\n' > "$mrs"
+printf '%s\n' "$@" >> "$state/log"
+printf -- '--\n' >> "$state/log"
+cmd="${1-} ${2-}"
+shift 2 || true
+repo='' source='' target='' title='' body='' iid='' all=0 draft=false
+while (($#)); do
+  case "$1" in
+    -R|--repo) repo="$2"; shift 2 ;;
+    --head) source="$2"; shift 2 ;;
+    --base) target="$2"; shift 2 ;;
+    --title) title="$2"; shift 2 ;;
+    --body-file) body="$2"; shift 2 ;;
+    --state) [[ "$2" != all ]] || all=1; shift 2 ;;
+    --draft) draft=true; shift ;;
+    --hostname|--json|--jq|--limit) shift 2 ;;
+    -*) echo 'unsupported gh flag' >&2; exit 2 ;;
+    *) iid="$1"; shift ;;
+  esac
+done
+repo="${repo#https://}"; repo="${repo%.git}"
+[[ -z "$repo" || "$repo" == github.com/* ]] || repo="github.com/$repo"
+project="https://$repo"
+case "$cmd" in
+  'api --hostname'|'api user')
+    case "${FAKE_GH_AUTH:-ok}" in
+      ok) echo fake-user ;;
+      revoked|fail) echo 'HTTP 401 Bad credentials' >&2; exit 1 ;;
+      *) echo 'dial tcp: connection refused' >&2; exit 1 ;;
+    esac
+    ;;
+  'pr list')
+    [[ "${FAKE_GH_LIST:-ok}" != garbage ]] || { echo 'not json'; exit 0; }
+    [[ "${FAKE_GH_LIST:-ok}" == ok ]] || { echo 'HTTP 500' >&2; exit 1; }
+    jq --arg p "$project" --arg s "$source" --argjson all "$all" \
+      '[.[] | select(.project == $p and .headRefName == $s and ($all == 1 or .state == "OPEN"))] | reverse' "$mrs"
+    ;;
+  'pr create')
+    [[ "${FAKE_GH_CREATE:-ok}" != fail ]] || { echo 'HTTP 403' >&2; exit 1; }
+    [[ "$draft" == true && -f "$body" ]] || exit 92
+    n="$(jq 'length + 1' "$mrs")"
+    jq --arg p "$project" --argjson n "$n" --arg s "$source" --arg t "$target" --arg ti "$title" --rawfile d "$body" \
+      '. + [{project:$p, number:$n, url:($p+"/pull/"+($n|tostring)), state:"OPEN", headRefName:$s, baseRefName:$t, title:$ti, body:($d|sub("\n$";"")), isDraft:true}]' "$mrs" > "$mrs.tmp"
+    mv "$mrs.tmp" "$mrs"
+    [[ "${FAKE_GH_CREATE:-ok}" == nourl ]] || printf '%s/pull/%s\n' "$project" "$n"
+    ;;
+  'pr edit')
+    [[ "${FAKE_GH_UPDATE:-ok}" == ok ]] || { echo 'HTTP 403' >&2; exit 1; }
+    jq --arg p "$project" --argjson i "$iid" --rawfile d "$body" \
+      'map(if .project == $p and .number == $i then .body=($d|sub("\n$";"")) else . end)' "$mrs" > "$mrs.tmp"
+    mv "$mrs.tmp" "$mrs"
+    ;;
+  'auth git-credential') exit 1 ;;
+  *) echo "unsupported gh command: $cmd" >&2; exit 2 ;;
+esac

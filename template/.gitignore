@@ -1,0 +1,28 @@
+# Credentials used by local tools must never enter git.
+/.env
+/.env.*
+!/.env.example
+
+# Runtime trees are generated from agents/ by ./ops sync.
+/.claude/
+/.agents/
+/.codex/
+/.mcp.json
+/.claude/settings.local.json
+/CLAUDE.local.md
+/harness.json
+/.platform-harness.json
+/.platform-harness-files.json
+
+# Workspace checkouts and local coordination state.
+/packages/*
+!/packages/.gitkeep
+/worktrees/
+/.coordination/
+/.agent-tools/
+
+# Побочный продукт python-проверок линта: lint.py и check-decisions.py лежат
+# под git, а репозиторий ничего на python не собирает — каталог подхватывается
+# первым же `git add -A` наравне с исходниками.
+__pycache__/
+*.pyc

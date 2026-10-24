@@ -1,0 +1,922 @@
+#!/usr/bin/env python3
+"""Local agent leases and task handoff records."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Iterator
+
+
+SCHEMA_VERSION = 1
+UTC = dt.timezone.utc
+ACTIVE_TTL_SECONDS = 30 * 60
+BUSY_TTL_SECONDS = 60 * 60
+IDLE_TTL_SECONDS = 24 * 60 * 60
+PRUNE_DIRS = {"node_modules", ".dart_tool", "Pods", "build", "dist"}
+TASK_TOKEN = r"[A-Za-z0-9][A-Za-z0-9._/-]*"
+GC_RETENTION_SECONDS = 14 * 24 * 60 * 60
+GC_TERMINAL_STATUSES = {"cleaned", "no-changes", "abandoned"}
+
+
+def now() -> dt.datetime:
+    return dt.datetime.now(UTC)
+
+
+def iso(value: dt.datetime | None = None) -> str:
+    return (value or now()).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def parse_time(value: str | None) -> dt.datetime:
+    if not value:
+        return dt.datetime.fromtimestamp(0, UTC)
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return dt.datetime.fromtimestamp(0, UTC)
+
+
+def parse_duration(value: str) -> int:
+    """Seconds from a retention argument: bare digits are days."""
+    text = value.strip().lower()
+    match = re.fullmatch(r"(\d+)([smhd]?)", text)
+    if not match:
+        raise argparse.ArgumentTypeError(
+            f"expected a duration like 14d, 36h, 90m or 3600s, got {value!r}"
+        )
+    scale = {"s": 1, "m": 60, "h": 3600, "d": 86400, "": 86400}
+    return int(match.group(1)) * scale[match.group(2)]
+
+
+def concise_span(seconds: int) -> str:
+    for size, suffix in ((86400, "d"), (3600, "h"), (60, "m")):
+        if seconds >= size and seconds % size == 0:
+            return f"{seconds // size}{suffix}"
+    return f"{seconds}s"
+
+
+def find_workspace_root() -> Path:
+    override = os.environ.get("WORKSPACE_COORDINATION_ROOT")
+    if override:
+        return Path(override).resolve()
+
+    fallback: Path | None = None
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "harness.json").is_file():
+            return parent
+        if fallback is None and (parent / "harness.example.json").is_file():
+            fallback = parent
+    if fallback:
+        return fallback
+    raise RuntimeError("cannot locate workspace root")
+
+
+ROOT = find_workspace_root()
+STATE = ROOT / ".coordination"
+SESSIONS = STATE / "sessions"
+TASKS = STATE / "tasks"
+ARCHIVE = STATE / "archive"
+LOCK = STATE / ".lock"
+
+
+def state_dirs() -> None:
+    for path in (STATE, SESSIONS, TASKS, ARCHIVE):
+        path.mkdir(parents=True, exist_ok=True)
+
+
+@contextlib.contextmanager
+def locked() -> Iterator[None]:
+    state_dirs()
+    with LOCK.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def record_name(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32] + ".json"
+
+
+def atomic_write(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as handle:
+        value = json.load(handle)
+    if not isinstance(value, dict):
+        raise ValueError("record is not an object")
+    return value
+
+
+def read_records(directory: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    if not directory.is_dir():
+        return records, errors
+    for path in sorted(directory.glob("*.json")):
+        try:
+            records.append(read_json(path))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"{path.relative_to(ROOT)}: {exc}")
+    return records, errors
+
+
+def task_path(task: str) -> Path:
+    return TASKS / record_name(task)
+
+
+def load_task(task: str) -> dict[str, Any]:
+    path = task_path(task)
+    if path.is_file():
+        return read_json(path)
+    stamp = iso()
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "task": task,
+        "status": "working",
+        "checkouts": [],
+        "repos": {},
+        "startedAt": stamp,
+        "updatedAt": stamp,
+    }
+
+
+def save_task(record: dict[str, Any]) -> None:
+    record["schemaVersion"] = SCHEMA_VERSION
+    record["updatedAt"] = iso()
+    atomic_write(task_path(str(record["task"])), record)
+
+
+def field(payload: dict[str, Any], *names: str, default: Any = None) -> Any:
+    for name in names:
+        if name in payload and payload[name] is not None:
+            return payload[name]
+    return default
+
+
+def branch_prefix() -> str:
+    for path in (ROOT / "harness.json", ROOT / "harness.example.json"):
+        if not path.is_file():
+            continue
+        try:
+            return str(read_json(path).get("branchPrefix") or "feature/")
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    return "feature/"
+
+
+def git(path: Path, *args: str, check: bool = True) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), *args],
+        capture_output=True,
+        text=True,
+    )
+    if check and result.returncode:
+        message = result.stderr.strip() or result.stdout.strip() or "git failed"
+        raise RuntimeError(message)
+    return result.stdout.strip()
+
+
+def git_ok(path: Path, *args: str) -> bool:
+    return subprocess.run(
+        ["git", "-C", str(path), *args],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+def task_for_checkout(checkout: str) -> str:
+    path = ROOT / checkout
+    branch = git(path, "branch", "--show-current", check=False)
+    prefix = branch_prefix()
+    if branch.startswith(prefix):
+        return branch[len(prefix):]
+    parts = Path(checkout).parts
+    return parts[1] if len(parts) > 2 else "unknown"
+
+
+def checkout_from_path(raw: str) -> str | None:
+    try:
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = ROOT / path
+        path = Path(os.path.normpath(path)).resolve(strict=False)
+        relative = path.relative_to(ROOT / "worktrees")
+    except (ValueError, OSError):
+        return None
+
+    parts = relative.parts
+    for length in range(len(parts), 1, -1):
+        candidate = ROOT / "worktrees" / Path(*parts[:length])
+        if (candidate / ".git").exists():
+            return str(Path("worktrees", *parts[:length]))
+    return None
+
+
+def iter_strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from iter_strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from iter_strings(item)
+
+
+def command_text(tool_input: Any) -> str:
+    if not isinstance(tool_input, dict):
+        return ""
+    command = tool_input.get("command")
+    if isinstance(command, str):
+        return command
+    if isinstance(command, list):
+        values = [str(item) for item in command]
+        for index, item in enumerate(values[:-1]):
+            if re.fullmatch(r"-[A-Za-z]*c", item):
+                return values[index + 1]
+        return " ".join(shlex.quote(item) for item in values)
+    return ""
+
+
+def command_details(command: str) -> dict[str, str]:
+    details: dict[str, str] = {}
+    patterns = (
+        ("claim", rf"(?:^|[;&|\s])(?:\S*/)?coord\s+claim\s+({TASK_TOKEN})"),
+        ("finish", rf"(?:^|[;&|\s])(?:\S*/)?coord\s+finish\s+({TASK_TOKEN})"),
+        ("wt_new", rf"(?:^|[;&|\s])(?:\S*/)?wt\s+new\s+({TASK_TOKEN})"),
+        ("adopt", rf"(?:^|[;&|\s])(?:\S*/)?adopt\.sh\s+({TASK_TOKEN})"),
+        ("release", rf"(?:^|[;&|\s])(?:\S*/)?coord\s+release\s+({TASK_TOKEN})"),
+    )
+    for name, pattern in patterns:
+        match = re.search(pattern, command)
+        if match:
+            task = match.group(1)
+            if name == "adopt":
+                prefix = branch_prefix()
+                task = task[len(prefix):] if task.startswith(prefix) else task
+            details[name] = task
+
+    finish_task = details.get("finish")
+    if finish_task:
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            tokens = []
+        for option in ("--outcome", "--mr-url", "--checkpoint"):
+            try:
+                index = tokens.index(option)
+                details[option[2:].replace("-", "_")] = tokens[index + 1][:500]
+            except (ValueError, IndexError):
+                pass
+    return details
+
+
+def infer_scope(payload: dict[str, Any]) -> tuple[set[str], set[str], dict[str, str]]:
+    tasks: set[str] = set()
+    checkouts: set[str] = set()
+    cwd = str(field(payload, "cwd", default="") or "")
+    if cwd:
+        checkout = checkout_from_path(cwd)
+        if checkout:
+            checkouts.add(checkout)
+
+    tool_input = field(payload, "tool_input", "toolInput", default={})
+    for value in iter_strings(tool_input):
+        for match in re.finditer(r"(?:^|[\s\"'=])([^\s\"']*worktrees/[A-Za-z0-9_./-]+)", value):
+            checkout = checkout_from_path(match.group(1).rstrip(".,:;)]}"))
+            if checkout:
+                checkouts.add(checkout)
+
+    command = command_text(tool_input)
+    details = command_details(command)
+    for key in ("claim", "finish", "wt_new", "adopt"):
+        if details.get(key):
+            tasks.add(details[key])
+    for checkout in checkouts:
+        tasks.add(task_for_checkout(checkout))
+    return tasks, checkouts, details
+
+
+def lease_state(lease: dict[str, Any], at: dt.datetime | None = None) -> str:
+    if lease.get("phase") == "ended":
+        return "ended"
+    phase = str(lease.get("phase") or "working")
+    ttl = {
+        "busy": BUSY_TTL_SECONDS,
+        "idle": IDLE_TTL_SECONDS,
+    }.get(phase, ACTIVE_TTL_SECONDS)
+    age = ((at or now()) - parse_time(str(lease.get("heartbeatAt") or ""))).total_seconds()
+    return "active" if age <= ttl else "stale"
+
+
+def task_matches(owned: str, requested: str) -> bool:
+    return owned == requested or owned.startswith(requested + "/")
+
+
+def tasks_overlap(left: str, right: str) -> bool:
+    return task_matches(left, right) or task_matches(right, left)
+
+
+def live_leases(task: str | None = None, exclude: str | None = None) -> list[dict[str, Any]]:
+    leases, _ = read_records(SESSIONS)
+    result = []
+    for lease in leases:
+        if lease.get("leaseId") == exclude or lease_state(lease) != "active":
+            continue
+        owned = [str(item) for item in lease.get("tasks", [])]
+        if task and not any(tasks_overlap(item, task) for item in owned):
+            continue
+        result.append(lease)
+    return result
+
+
+def concise_age(value: str | None) -> str:
+    seconds = max(0, int((now() - parse_time(value)).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+def hook_message(client: str, event: str, message: str) -> None:
+    if not message:
+        return
+    if client == "claude":
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": event,
+                "additionalContext": message,
+            }
+        }))
+    else:
+        print(json.dumps({"systemMessage": message}))
+
+
+def hook_deny(event: str, reason: str) -> None:
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }))
+
+
+def session_start_summary(own_lease: str) -> str:
+    active = [item for item in live_leases(exclude=own_lease) if item.get("tasks")]
+    if not active:
+        return ""
+    lines = ["Workspace coordination: other active agent leases:"]
+    for lease in active[:10]:
+        tasks = ", ".join(str(item) for item in lease.get("tasks", []))
+        owner = f"{lease.get('client', '?')}/{lease.get('agentId', 'root')}"
+        lines.append(f"- {tasks}: {owner}, {lease.get('phase', 'working')}, heartbeat {concise_age(lease.get('heartbeatAt'))} ago")
+    lines.append("Run .claude/skills/coordination/coord status before taking over a task.")
+    return "\n".join(lines)
+
+
+def cmd_hook(args: argparse.Namespace) -> int:
+    try:
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            return 0
+        session_id = str(field(payload, "session_id", "sessionId", default="") or "")
+        if not session_id:
+            return 0
+        event = str(field(payload, "hook_event_name", "hookEventName", default="") or "")
+        agent_id = str(field(payload, "agent_id", "agentId", default="root") or "root")
+        agent_type = str(field(payload, "agent_type", "agentType", default="") or "")
+        lease_key = f"{args.client}:{session_id}:{agent_id}"
+        lease_id = hashlib.sha256(lease_key.encode("utf-8")).hexdigest()[:24]
+        lease_file = SESSIONS / record_name(lease_key)
+        tasks, checkouts, details = infer_scope(payload)
+
+        with locked():
+            cleaning_tasks = [
+                str(record.get("task"))
+                for record in all_tasks()
+                if record.get("status") == "cleaning"
+            ]
+            for task in tasks:
+                cleaning = next(
+                    (name for name in cleaning_tasks if tasks_overlap(name, task)),
+                    None,
+                )
+                if cleaning and event == "PreToolUse":
+                    hook_deny(
+                        event,
+                        f"Task {cleaning} is being cleaned up; "
+                        "do not enter or modify its worktree.",
+                    )
+                    return 0
+
+            stamp = iso()
+            if lease_file.is_file():
+                lease = read_json(lease_file)
+            else:
+                lease = {
+                    "schemaVersion": SCHEMA_VERSION,
+                    "leaseId": lease_id,
+                    "client": args.client,
+                    "sessionId": session_id,
+                    "agentId": agent_id,
+                    "agentType": agent_type,
+                    "startedAt": stamp,
+                    "tasks": [],
+                    "checkouts": [],
+                }
+
+            phases = {
+                "PreToolUse": "busy",
+                "PostToolUse": "working",
+                "Stop": "idle",
+                "SessionEnd": "ended",
+                "UserPromptSubmit": "working",
+                "SessionStart": "working",
+            }
+            previous_phase = str(lease.get("phase") or "working")
+            lease["phase"] = phases.get(event, previous_phase)
+            if previous_phase == "ended" and event == "Stop":
+                lease["phase"] = "ended"
+            lease["heartbeatAt"] = stamp
+            lease["lastEvent"] = event
+            lease["agentType"] = agent_type or lease.get("agentType", "")
+            cwd = str(field(payload, "cwd", default="") or "")
+            if cwd:
+                try:
+                    lease["cwd"] = str(Path(cwd).resolve().relative_to(ROOT))
+                except (ValueError, OSError):
+                    lease["cwd"] = "outside-workspace"
+            owned_tasks = set(str(item) for item in lease.get("tasks", [])) | tasks
+            owned_checkouts = set(str(item) for item in lease.get("checkouts", [])) | checkouts
+            finished_task = details.get("finish")
+            # `release` and `finish` hand the task back from this session.
+            released_task = finished_task or details.get("release")
+            if released_task:
+                owned_tasks = {item for item in owned_tasks if not task_matches(item, released_task)}
+                owned_checkouts = {
+                    item for item in owned_checkouts
+                    if not task_matches(task_for_checkout(item), released_task)
+                }
+            if finished_task:
+                lease["phase"] = "idle" if owned_tasks else "ended"
+            lease["tasks"] = sorted(owned_tasks)
+            lease["checkouts"] = sorted(owned_checkouts)
+            atomic_write(lease_file, lease)
+
+            for task in tasks:
+                record = load_task(task)
+                record["checkouts"] = sorted(set(record.get("checkouts", [])) | {
+                    item for item in checkouts if task_matches(task_for_checkout(item), task)
+                })
+                if finished_task == task:
+                    record["status"] = details.get("outcome", "paused")
+                    if details.get("checkpoint"):
+                        record["checkpoint"] = details["checkpoint"]
+                    if details.get("mr_url"):
+                        record["mrUrl"] = details["mr_url"]
+                elif released_task and task_matches(task, released_task):
+                    pass
+                elif event in {"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"}:
+                    record["status"] = "working"
+                save_task(record)
+
+            message = ""
+            if event == "SessionStart":
+                message = session_start_summary(lease_id)
+            elif event == "PreToolUse" and checkouts:
+                peers = []
+                for peer in live_leases(exclude=lease_id):
+                    overlap = sorted(checkouts & set(peer.get("checkouts", [])))
+                    if overlap:
+                        peers.append(
+                            f"{', '.join(overlap)} is also active in "
+                            f"{peer.get('client', '?')}/{peer.get('agentId', 'root')}"
+                        )
+                if peers:
+                    message = "Workspace coordination warning (advisory):\n- " + "\n- ".join(peers)
+        hook_message(args.client, event, message)
+    except Exception as exc:  # Hooks are observability; they must fail open.
+        print(f"coordination hook warning: {exc}", file=sys.stderr)
+    return 0
+
+
+def all_tasks() -> list[dict[str, Any]]:
+    records, _ = read_records(TASKS)
+    return sorted(records, key=lambda item: str(item.get("task", "")))
+
+
+def task_leases(task: str) -> list[dict[str, Any]]:
+    leases, _ = read_records(SESSIONS)
+    return [
+        lease for lease in leases
+        if any(tasks_overlap(str(owned), task) for owned in lease.get("tasks", []))
+    ]
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    tasks = [load_task(args.task)] if args.task else all_tasks()
+    if args.json:
+        print(json.dumps({
+            "tasks": tasks,
+            "sessions": read_records(SESSIONS)[0],
+        }, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if not tasks:
+        print("no coordination records")
+        return 0
+    for task in tasks:
+        name = str(task.get("task", "?"))
+        print(f"== {name} ==")
+        print(f"  task: {task.get('status', 'unknown')}")
+        if task.get("checkpoint"):
+            print(f"  checkpoint: {task['checkpoint']}")
+        if task.get("mrUrl"):
+            print(f"  MR: {task['mrUrl']}")
+        for lease in task_leases(name):
+            owner = f"{lease.get('client', '?')}/{lease.get('agentId', 'root')}"
+            print(
+                f"  {lease_state(lease):6} {owner:24} {lease.get('phase', 'working'):8} "
+                f"heartbeat {concise_age(lease.get('heartbeatAt'))} ago"
+            )
+    return 0
+
+
+def cmd_summary(args: argparse.Namespace) -> int:
+    path = task_path(args.task)
+    tasks = [read_json(path)] if path.is_file() else [
+        item for item in all_tasks()
+        if task_matches(str(item.get("task", "")), args.task)
+    ]
+    if not tasks:
+        return 0
+    leases = []
+    for task in tasks:
+        leases.extend(task_leases(str(task.get("task", ""))))
+    active = sum(1 for item in leases if lease_state(item) == "active")
+    stale = sum(1 for item in leases if lease_state(item) == "stale")
+    statuses = sorted(set(str(item.get("status", "unknown")) for item in tasks))
+    bits = [f"coord={','.join(statuses)}"]
+    if active:
+        bits.append(f"active={active}")
+    if stale:
+        bits.append(f"stale={stale}")
+    print(" ".join(bits))
+    return 0
+
+
+def cmd_claim(args: argparse.Namespace) -> int:
+    with locked():
+        task = load_task(args.task)
+        task["status"] = "working"
+        if args.checkout:
+            checkout = str(Path(args.checkout))
+            task["checkouts"] = sorted(set(task.get("checkouts", [])) | {checkout})
+        save_task(task)
+    captured = [
+        lease for lease in task_leases(args.task)
+        if (now() - parse_time(lease.get("heartbeatAt"))).total_seconds() < 15
+    ]
+    if captured:
+        print(f"claimed: {args.task}")
+    else:
+        print(
+            "warning: task record updated, but no current session lease observed; "
+            "project hooks may need sync/trust/restart",
+            file=sys.stderr,
+        )
+    peers = live_leases(args.task)
+    if len(peers) > 1:
+        print(f"warning: {len(peers)} active leases overlap task {args.task}", file=sys.stderr)
+    return 0
+
+
+def cmd_finish(args: argparse.Namespace) -> int:
+    with locked():
+        task = load_task(args.task)
+        task["status"] = args.outcome
+        if args.checkpoint:
+            task["checkpoint"] = args.checkpoint[:500]
+        if args.mr_url:
+            task["mrUrl"] = args.mr_url
+        save_task(task)
+    print(f"handoff: {args.task} -> {args.outcome}")
+    return 0
+
+
+def cmd_record_mr(args: argparse.Namespace) -> int:
+    with locked():
+        task = load_task(args.task)
+        repos = task.setdefault("repos", {})
+        key = args.checkout or args.repo
+        state = {"created": "opened", "existing": "opened"}.get(args.state, args.state)
+        repos[key] = {
+            "repo": args.repo,
+            "checkout": args.checkout or "",
+            "branch": args.branch or "",
+            "headSha": args.sha or "",
+            "mrUrl": args.url,
+            "mrState": state,
+            "targetBranch": args.target or "",
+            "checkedAt": iso(),
+        }
+        task["status"] = "mr" if state in {"opened", "created", "existing"} else state
+        task["mrUrl"] = args.url
+        save_task(task)
+    return 0
+
+
+def scan_checkouts(task: str) -> list[str]:
+    start = ROOT / "worktrees" / task
+    if not start.is_dir():
+        return []
+    result: list[str] = []
+    for current, dirs, _ in os.walk(start):
+        path = Path(current)
+        depth = len(path.relative_to(start).parts)
+        dirs[:] = [name for name in dirs if name not in PRUNE_DIRS]
+        if (path / ".git").exists():
+            result.append(str(path.relative_to(ROOT)))
+            dirs[:] = []
+        elif depth >= 5:
+            dirs[:] = []
+    return sorted(result)
+
+
+def fresh_leases(seconds: int = 15) -> list[dict[str, Any]]:
+    """Leases a lifecycle hook touched just now — i.e. this session's own."""
+    leases, _ = read_records(SESSIONS)
+    return [
+        lease for lease in leases
+        if (now() - parse_time(lease.get("heartbeatAt"))).total_seconds() < seconds
+    ]
+
+
+def cmd_release(args: argparse.Namespace) -> int:
+    if not task_path(args.task).is_file():
+        print(f"no coordination record for task {args.task}", file=sys.stderr)
+        return 1
+    # The lease belongs to the session, and only the lifecycle hook knows which
+    # session that is; it has already dropped this task by the time we run.
+    if not fresh_leases():
+        print(
+            "warning: no current session lease observed; "
+            "project hooks may need sync/trust/restart",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"released: {args.task}")
+    peers = live_leases(args.task)
+    for lease in peers:
+        print(
+            f"  still owned by {lease.get('client', '?')}/{lease.get('agentId', 'root')} "
+            f"({lease.get('phase', 'working')}, heartbeat "
+            f"{concise_age(lease.get('heartbeatAt'))} ago)"
+        )
+    return 0
+
+
+def gc_candidates(cutoff: dt.datetime) -> tuple[list[tuple[Path, dict[str, Any]]], list[tuple[Path, dict[str, Any]]]]:
+    """Session leases and task records that are terminal and older than cutoff.
+
+    Corrupt records are left alone; `doctor` is what reports those.
+    """
+    sessions: list[tuple[Path, dict[str, Any]]] = []
+    for path in sorted(SESSIONS.glob("*.json")):
+        try:
+            lease = read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        state = lease_state(lease)
+        # `stale` only means the heartbeat is old. A quiet lease that still owns
+        # a task may be a live agent, and dropping it would drop the guard on
+        # that agent's worktree; only an ended session gives up its tasks.
+        if state == "active" or (state == "stale" and lease.get("tasks")):
+            continue
+        if parse_time(str(lease.get("heartbeatAt") or "")) > cutoff:
+            continue
+        sessions.append((path, lease))
+
+    tasks: list[tuple[Path, dict[str, Any]]] = []
+    for path in sorted(TASKS.glob("*.json")):
+        try:
+            record = read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        name = str(record.get("task") or "")
+        if not name or str(record.get("status") or "") not in GC_TERMINAL_STATUSES:
+            continue
+        if parse_time(str(record.get("updatedAt") or "")) > cutoff:
+            continue
+        if live_leases(name):
+            continue
+        recorded = set(str(item) for item in record.get("checkouts", []))
+        if any((ROOT / item).is_dir() for item in recorded) or scan_checkouts(name):
+            continue
+        tasks.append((path, record))
+    return sessions, tasks
+
+
+def cmd_gc(args: argparse.Namespace) -> int:
+    window = concise_span(args.older_than)
+    cutoff = now() - dt.timedelta(seconds=args.older_than)
+    sessions, tasks = gc_candidates(cutoff)
+    if not sessions and not tasks:
+        print(f"gc: no terminal record is older than {window}")
+        return 0
+
+    print(f"gc: terminal records older than {window}")
+    for _, lease in sessions:
+        print(
+            f"  session {lease.get('client', '?')}/{lease.get('agentId', 'root')} "
+            f"{lease_state(lease)} heartbeat {concise_age(lease.get('heartbeatAt'))} ago"
+        )
+    for _, record in tasks:
+        print(f"  task {record.get('task', '?')} ({record.get('status', 'unknown')})")
+
+    if not args.apply:
+        print(
+            f"gc: {len(sessions)} session(s), {len(tasks)} task(s) "
+            "(dry-run; pass --apply to delete)"
+        )
+        return 0
+
+    removed = 0
+    with locked():
+        # Re-read under the lock: a session may have woken up since the scan.
+        sessions, tasks = gc_candidates(cutoff)
+        for path, _ in sessions + tasks:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as exc:
+                print(f"  error: {path.name}: {exc}", file=sys.stderr)
+    print(f"gc: removed {removed} record(s); archive preserved")
+    return 0
+
+
+def cmd_guard_remove(args: argparse.Namespace) -> int:
+    leases = live_leases(args.task)
+    if not leases:
+        return 0
+    print(f"coordination: refusing to remove task '{args.task}' with active leases:", file=sys.stderr)
+    for lease in leases:
+        print(
+            f"  {lease.get('client', '?')}/{lease.get('agentId', 'root')} "
+            f"{lease.get('phase', 'working')} heartbeat {concise_age(lease.get('heartbeatAt'))} ago",
+            file=sys.stderr,
+        )
+    return 1
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    _, session_errors = read_records(SESSIONS)
+    tasks, task_errors = read_records(TASKS)
+    errors = session_errors + task_errors
+    warnings: list[str] = []
+    leases, _ = read_records(SESSIONS)
+    for lease in leases:
+        if lease_state(lease) == "stale":
+            warnings.append(
+                f"stale lease {lease.get('client', '?')}/{lease.get('agentId', 'root')} "
+                f"heartbeat {concise_age(lease.get('heartbeatAt'))} ago"
+            )
+    owners: dict[str, list[str]] = {}
+    for lease in leases:
+        if lease_state(lease) != "active":
+            continue
+        owner = f"{lease.get('client', '?')}/{lease.get('agentId', 'root')}"
+        for checkout in lease.get("checkouts", []):
+            owners.setdefault(str(checkout), []).append(owner)
+    for checkout, values in owners.items():
+        if len(values) > 1:
+            warnings.append(f"overlapping active leases on {checkout}: {', '.join(values)}")
+    for task in tasks:
+        for checkout in task.get("checkouts", []):
+            if not (ROOT / str(checkout)).exists() and task.get("status") != "cleaned":
+                warnings.append(f"{task.get('task', '?')}: missing recorded checkout {checkout}")
+
+    if not args.quiet:
+        print("== coordination ==")
+        if not leases:
+            print("  no session leases observed (hooks may need sync/trust/restart)")
+        for warning in warnings:
+            print(f"  warning: {warning}")
+        for error in errors:
+            print(f"  error: {error}")
+        if leases and not warnings and not errors:
+            print(f"  {len(leases)} lease(s), no coordination problems")
+    return 1 if errors else 0
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(prog="coord", description=__doc__)
+    sub = result.add_subparsers(dest="command", required=True)
+
+    hook = sub.add_parser("hook", help=argparse.SUPPRESS)
+    hook.add_argument("--client", choices=("claude", "codex"), required=True)
+    hook.set_defaults(func=cmd_hook)
+
+    status = sub.add_parser("status", help="show task and session state")
+    status.add_argument("task", nargs="?")
+    status.add_argument("--json", action="store_true")
+    status.set_defaults(func=cmd_status)
+
+    summary = sub.add_parser("summary", help=argparse.SUPPRESS)
+    summary.add_argument("--task", required=True)
+    summary.set_defaults(func=cmd_summary)
+
+    claim = sub.add_parser("claim", help="announce work on a task")
+    claim.add_argument("task")
+    claim.add_argument("--checkout")
+    claim.set_defaults(func=cmd_claim)
+
+    finish = sub.add_parser("finish", help="record the task handoff point")
+    finish.add_argument("task")
+    finish.add_argument(
+        "--outcome",
+        choices=("mr", "blocked", "paused", "no-changes", "abandoned"),
+        required=True,
+    )
+    finish.add_argument("--checkpoint")
+    finish.add_argument("--mr-url")
+    finish.set_defaults(func=cmd_finish)
+
+    record = sub.add_parser("record-mr", help=argparse.SUPPRESS)
+    record.add_argument("--task", required=True)
+    record.add_argument("--repo", required=True)
+    record.add_argument("--checkout")
+    record.add_argument("--branch")
+    record.add_argument("--sha")
+    record.add_argument("--url", required=True)
+    record.add_argument("--state", required=True)
+    record.add_argument("--target")
+    record.set_defaults(func=cmd_record_mr)
+
+    release = sub.add_parser("release", help="hand this session's lease on a task back")
+    release.add_argument("task")
+    release.set_defaults(func=cmd_release)
+
+    gc = sub.add_parser("gc", help="delete terminal leases and task records")
+    gc.add_argument(
+        "--older-than",
+        type=parse_duration,
+        default=GC_RETENTION_SECONDS,
+        metavar="AGE",
+        help="retention window; bare digits are days (default: 14d)",
+    )
+    gc.add_argument("--apply", action="store_true")
+    gc.set_defaults(func=cmd_gc)
+
+    guard = sub.add_parser("guard-remove", help=argparse.SUPPRESS)
+    guard.add_argument("task")
+    guard.set_defaults(func=cmd_guard_remove)
+
+    doctor = sub.add_parser("doctor", help="validate leases and task records")
+    doctor.add_argument("--quiet", action="store_true")
+    doctor.set_defaults(func=cmd_doctor)
+    return result
+
+
+def main() -> int:
+    args = parser().parse_args()
+    return int(args.func(args))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

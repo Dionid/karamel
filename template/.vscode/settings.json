@@ -1,0 +1,42 @@
+{
+  "git.autoRepositoryDetection": true,
+  "git.repositoryScanMaxDepth": 5,
+  // Паттерны привязаны к папке намеренно: префикс `**/` VS Code не
+  // якорит и сверяет с абсолютным путём, так что в checkout'е worktree
+  // (`.../worktrees/<task>/agent-workspace`) под него попадает каждый файл и
+  // наблюдение за файлами там отключается.
+  "files.watcherExclude": {
+    "packages/**": true,
+    "worktrees/**": true
+  },
+
+  // @-автокомплит в расширении Claude Code. Он НЕ ходит в
+  // settings.json → fileSuggestion (тот хук работает только в CLI в
+  // терминале): список строит само расширение через vscode findFiles и
+  // подмешивает в excludes паттерны из .gitignore, где лежат /packages/* и
+  // /worktrees/ — то есть всё, в чём тут работают. Этот флаг отключает
+  // подмешивание .gitignore, и подсказки снова видят рабочие каталоги.
+  "claudeCode.respectGitIgnore": false,
+
+  // Без .gitignore шум надо отсекать вручную: excludes расширение всё так же
+  // собирает из search.exclude + files.exclude. Список — PRUNE_NAMES из
+  // agents/claude/file-suggestion.sh.
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.git": true,
+    "**/.dart_tool": true,
+    "**/.gradle": true,
+    "**/.idea": true,
+    "**/.venv": true,
+    "**/__pycache__": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/coverage": true,
+    "**/.next": true,
+    "**/.turbo": true,
+    "**/.nuxt": true,
+    "**/.output": true,
+    "**/Pods": true,
+    "**/DerivedData": true
+  }
+}

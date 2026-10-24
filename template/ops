@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# Agent workspace operator CLI. This is the human-facing command catalog for the
+# workspace; implementation scripts stay next to the skills that own them.
+
+set -euo pipefail
+
+ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+die() {
+  printf 'ops: %s\n' "$*" >&2
+  exit 2
+}
+
+skill_tool() {
+  local relative="$1"
+  local candidate
+  for candidate in \
+    "$ROOT/.claude/skills/$relative" \
+    "$ROOT/agents/common/skills/$relative"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  die "tool is not available: $relative (run './ops sync' first)"
+}
+
+harness() {
+  local executable="$ROOT/agents/build.py"
+  [ -x "$executable" ] || die "runtime builder is not executable: $executable"
+  "$executable" "$@"
+}
+
+# Ставит tracked git-хуки из agents/git-hooks в .git/hooks корневого чекаута:
+# `git pull` тогда сам вызывает `./ops sync`. Симлинк, а не копия, чтобы новая
+# версия хука приезжала с обычным pull. Чужой хук и core.hooksPath не трогаем,
+# а сборку из-за них не роняем.
+install_git_hooks() {
+  # Linked worktree (`.git` — файл) и каталог без git хуков не получают.
+  [ -d "$ROOT/.git" ] || return 0
+  # Чистый клон в packages/ — не корень, даже если в нём запускали sync.
+  [ "$(basename "$(dirname "$ROOT")")" != "packages" ] || return 0
+  local hooks_path name target link
+  hooks_path="$(git -C "$ROOT" config --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$hooks_path" ]; then
+    printf 'ops: git hooks not installed: core.hooksPath is set (%s)\n' "$hooks_path" >&2
+    return 0
+  fi
+  for name in post-merge post-rewrite; do
+    [ -f "$ROOT/agents/git-hooks/$name" ] || continue
+    target="../../agents/git-hooks/$name"
+    link="$ROOT/.git/hooks/$name"
+    if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+      continue
+    fi
+    if [ -e "$link" ] || [ -L "$link" ]; then
+      printf 'ops: git hook not installed, %s already exists; leaving it untouched\n' "$link" >&2
+      continue
+    fi
+    mkdir -p "$ROOT/.git/hooks" 2>/dev/null || true
+    if ln -s "$target" "$link" 2>/dev/null; then
+      printf 'installed git hook: .git/hooks/%s\n' "$name"
+    else
+      printf 'ops: could not install git hook %s\n' "$link" >&2
+    fi
+  done
+  return 0
+}
+
+print_help() {
+  cat <<'EOF'
+Agent workspace operator CLI
+
+Usage:
+  ./ops <command> [arguments]
+  ./ops help [command]
+  npm run ops -- <command> [arguments]
+
+Workspace setup:
+  setup                           Build runtime trees, install git hooks, create a local .env template
+  sync                            Rebuild runtime trees from agents/ and install git hooks
+  update                          Alias for sync; sources live in this repository
+  status [--json]                 Show what sync would change
+  check [--scratch|--in-place]    Verify sources build and agree with generated trees
+                                  (worktrees: in a temporary directory, see 'help check')
+
+Repositories and worktrees:
+  clone [arguments]               Populate packages/ from repos.json
+  doctor [arguments]              Diagnose packages/ and worktrees/
+  wt [arguments]                  Run the task-worktree CLI
+  pull [repo|--repo name]...      Fast-forward package checkouts
+  adopt <branch> --repo <name>    Adopt a branch already present on origin
+
+Runtime maintenance:
+  lint [options]                  Run workspace lint
+  lint strict [options]           Treat lint warnings as failures
+  lint install-hook               Install the pre-commit lint hook
+  lint install-tools              Install pinned external lint tools
+  completion bash|zsh             Print shell completion
+
+Run 'npm run ops -- help <command>' for contextual examples.
+EOF
+}
+
+print_wt_help() {
+  cat <<'EOF'
+Task worktrees
+
+Each task lives in worktrees/<task>/<repo> on feature/<task>.
+
+Create a task:
+  ./ops wt new <task> --repo <repo> --pull
+  ./ops wt new <task> --repo <repo-1> --repo <repo-2> --pull
+
+Inspect and maintain:
+  ./ops wt list
+  ./ops wt repos
+  ./ops doctor --repo <repo>
+  ./ops pull --repo <repo>
+  ./ops wt seed --repo <repo>
+  ./ops wt clone <repo>
+  ./ops wt manifest
+
+Continue a branch already on origin:
+  ./ops adopt feature/<task> --repo <repo>
+
+Remove a completed task after commit-and-mr:
+  ./ops wt rm <task> --delete-branch
+  ./ops wt prune --repo <repo>
+
+Remove every task already merged into its base branch:
+  ./ops wt cleanup --dry-run
+  ./ops wt cleanup
+
+Run './ops wt --help' for the complete command reference.
+EOF
+}
+
+print_command_help() {
+  case "${1:-}" in
+    "") print_help ;;
+    wt|worktrees) print_wt_help ;;
+    setup|sync|update)
+      printf 'Usage: ./ops %s\n' "$1"
+      printf '%s\n' 'In the root checkout also installs git hooks (post-merge, post-rewrite) that run' \
+        "'./ops wt pull all' then './ops sync' after git pull; WORKSPACE_NO_AUTO_WT_PULL=1 skips only" \
+        'the pull, WORKSPACE_NO_AUTO_SYNC=1 skips both.'
+      ;;
+    check)
+      cat <<'EOF'
+Usage: ./ops check [--scratch|--in-place]
+
+In the workspace root, verifies the generated .claude/, .agents/, .codex/ and
+harness.json in place: drift exits 1, fixed by './ops sync'.
+
+Everywhere else — a linked git worktree (.git is a file), any checkout under
+worktrees/, a clone in packages/ — builds the trees into a temporary directory,
+verifies them there and removes it; the checkout is left untouched. Never run
+'./ops sync' in a worktree: generated trees make it a workspace root of its own.
+
+  --scratch     force the temporary-directory check
+  --in-place    force the in-place check; use it in a non-root checkout whose
+                generated trees you actually need checked in place (e.g. a
+                'git worktree add' acceptance checkout you synced). './ops sync'
+                itself runs only in the workspace root.
+
+Exit codes: 0 clean, 1 drift, 2 sources do not build,
+3 could not prepare a temporary directory.
+EOF
+      ;;
+    status) printf '%s\n' 'Usage: ./ops status [--json]' ;;
+    clone) printf '%s\n' 'Usage: ./ops clone [repo ...]' ;;
+    doctor) printf '%s\n' 'Usage: ./ops doctor [--repo <name>]... [--no-fetch]' ;;
+    pull) printf '%s\n' 'Usage: ./ops pull [repo ... | --repo <name> ...] [wt options]' ;;
+    adopt) printf '%s\n' 'Usage: ./ops adopt <feature/branch> --repo <name> [--repo <other>] [options]' ;;
+    lint) printf '%s\n' 'Usage: ./ops lint [strict|install-hook|install-tools] [lint options]' ;;
+    completion) printf '%s\n' 'Usage: ./ops completion bash|zsh' ;;
+    *) die "unknown command: $1" ;;
+  esac
+}
+
+completion() {
+  case "${1:-}" in
+    bash)
+      cat <<'EOF'
+_agent_workspace_ops() {
+  local commands="help setup sync update status check clone doctor wt pull adopt lint completion"
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=( $(compgen -W "$commands" -- "${COMP_WORDS[COMP_CWORD]}") )
+  fi
+}
+complete -F _agent_workspace_ops ops ./ops
+EOF
+      ;;
+    zsh)
+      cat <<'EOF'
+_agent_workspace_ops() {
+  local -a commands
+  commands=(help setup sync update status check clone doctor wt pull adopt lint completion)
+  _describe 'command' commands
+}
+compdef _agent_workspace_ops ops ./ops
+EOF
+      ;;
+    *) die "completion expects 'bash' or 'zsh'" ;;
+  esac
+}
+
+command="${1:-help}"
+if (($# > 0)); then shift; fi
+
+case "$command" in
+  help|-h|--help)
+    print_command_help "${1:-}"
+    ;;
+  setup)
+    (($# == 0)) || die "$command does not accept arguments"
+    harness sync
+    install_git_hooks
+    [ ! -L "$ROOT/.env" ] || die "refusing to create .env through a symlink"
+    if [ ! -e "$ROOT/.env" ] && [ -f "$ROOT/.env.example" ]; then
+      env_temp="$(mktemp "$ROOT/.env.tmp.XXXXXX")"
+      chmod 600 "$env_temp"
+      cp "$ROOT/.env.example" "$env_temp"
+      chmod 600 "$env_temp"
+      if ! ln "$env_temp" "$ROOT/.env"; then
+        rm -f "$env_temp"
+        die "refusing to replace an existing .env"
+      fi
+      rm -f "$env_temp"
+      printf '%s\n' 'created .env from .env.example; fill credentials locally'
+    fi
+    ;;
+  sync|update)
+    (($# == 0)) || die "$command does not accept arguments"
+    harness sync
+    install_git_hooks
+    ;;
+  status)
+    harness status "$@"
+    ;;
+  check)
+    case "${1:-}" in
+      ""|--scratch|--in-place) (($# <= 1)) || die "check accepts one of --scratch, --in-place" ;;
+      *) die "check accepts one of --scratch, --in-place" ;;
+    esac
+    harness check "$@"
+    ;;
+  clone)
+    "$(skill_tool clone/clone.sh)" "$@"
+    ;;
+  doctor)
+    "$(skill_tool wt/wt)" doctor "$@"
+    ;;
+  wt|worktrees)
+    if (($# == 0)); then
+      print_wt_help
+    else
+      "$(skill_tool wt/wt)" "$@"
+    fi
+    ;;
+  pull)
+    if (($# == 0)); then
+      "$(skill_tool wt/wt)" pull all
+    else
+      "$(skill_tool wt/wt)" pull "$@"
+    fi
+    ;;
+  adopt)
+    (($# > 0)) || die "adopt expects <feature/branch> --repo <name>"
+    "$(skill_tool wt/adopt.sh)" "$@"
+    ;;
+
+  lint)
+    lint_tool="$(skill_tool lint/lint.sh)"
+    case "${1:-}" in
+      strict) shift; "$lint_tool" --strict "$@" ;;
+      install-hook) shift; "$lint_tool" --install-hook "$@" ;;
+      install-tools) shift; "$lint_tool" --install-tools "$@" ;;
+      *) "$lint_tool" "$@" ;;
+    esac
+    ;;
+  completion)
+    completion "${1:-}"
+    ;;
+  *)
+    die "unknown command: $command (run './ops help')"
+    ;;
+esac

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# post-rewrite — после `git pull --rebase` (аргумент `rebase`) делает то же, что
+# post-merge. `git commit --amend` (`amend`) и прочее игнорируется.
+#
+# Fail-open: любой неожиданный ввод — выход с нулём (см. AGENTS.md).
+
+# git подаёт на stdin пары old/new sha; читать их не нужно, но и оставлять
+# непрочитанными незачем.
+cat >/dev/null 2>&1 || true
+
+[ "${1:-}" = "rebase" ] || exit 0
+
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+shared="$top/agents/git-hooks/post-merge"
+[ -f "$shared" ] || exit 0
+bash "$shared" || true
+exit 0

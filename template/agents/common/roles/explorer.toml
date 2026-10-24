@@ -1,0 +1,9 @@
+# Codex profile is generated from explorer.md; the immediate parent supplies
+# model and reasoning_effort for each invocation.
+name = "explorer"
+description = "Read-only terminal investigator for Track A and Track P. Never writes files or delegates."
+
+developer_instructions = """
+Read `.claude/agents/explorer.md` and follow it as written. This role is
+terminal and read-only. Do not spawn subagents or change files.
+"""

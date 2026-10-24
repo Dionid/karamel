@@ -1,0 +1,7 @@
+{
+  "team": "Team",
+  "agent": "Engineering agent",
+  "branch": "main",
+  "branchPrefix": "codex/",
+  "customSkills": {}
+}

@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "//": "Edit(/knowledge/**) — растяжка, а не защита knowledge-чекаута. Каталог knowledge/ уехал в knowledge-репозиторий, в корне воркспейса его быть не должно, и это правило ловит момент, когда он туда возвращается. Сам чекаут знаний закрыт базовым Edit(/packages/**), а запись идёт в worktrees/<task>/<knowledge-repo>/<knowledge-root>/. Ключ // в собранное дерево не попадает: agents/build.py его вырезает. Edit(/projects/**) и Edit(/openspec/**) ловят ошибочную запись нового project/spec-root в корень workspace.",
+    "deny": [
+      "Edit(/knowledge/**)",
+      "Edit(/projects/**)",
+      "Edit(/openspec/**)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/scan-outgoing-secrets.py\"",
+            "timeout": 10,
+            "statusMessage": "Защита секретов — держит ответ, в котором строка формата живого ключа"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,73 @@
+# Lifecycle hooks are additive: the repo-local builder appends this fragment
+# even when
+# a team config replaces config.base.toml. Otherwise a harmless team override
+# would silently disable leases and make every live agent look dead.
+
+# The deny list, for the agent that has no `permissions.deny` of its own.
+# Deliberately here and not in config.base.toml: a team config may replace the
+# base wholesale, and this fragment is appended regardless. A protection that a
+# harmless override can silently remove is not a protection — the same argument
+# the leases above are here for.
+[[hooks.PreToolUse]]
+matcher = "Bash|shell|local_shell|exec_command|unified_exec|apply_patch|write_file|patch|edit_file|read_file|Read|Edit|Write"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "@ROOT@/.agents/hooks/enforce-deny-rules.sh"
+timeout = 10
+statusMessage = "Политика доступа — применяет deny-list к чтению, записи и shell-командам"
+
+# The workspace itself. Here for the same reason as the deny list above: a team
+# config that replaces config.base.toml must not be able to remove the guard
+# that keeps the shared tree — and every other session's uncommitted work in it
+# — from being deleted by one mistyped path.
+[[hooks.PreToolUse]]
+matcher = "Bash|shell|local_shell|exec_command|unified_exec"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "@ROOT@/.agents/hooks/block-workspace-deletion.sh"
+timeout = 10
+statusMessage = "Защита воркспейса — блокирует удаление корня и общего каталога"
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "@ROOT@/.agents/skills/coordination/coord hook --client codex"
+timeout = 5
+statusMessage = "Координация: старт — регистрирует сессию и показывает активные задачи"
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "@ROOT@/.agents/skills/coordination/coord hook --client codex"
+timeout = 5
+statusMessage = "Координация: запрос — обновляет lease перед новым сообщением"
+
+[[hooks.PreToolUse]]
+matcher = ".*"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "@ROOT@/.agents/skills/coordination/coord hook --client codex"
+timeout = 5
+statusMessage = "Координация: до инструмента — отмечает занятость и ищет пересечения"
+
+[[hooks.PostToolUse]]
+matcher = ".*"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "@ROOT@/.agents/skills/coordination/coord hook --client codex"
+timeout = 5
+statusMessage = "Координация: после инструмента — обновляет lease и рабочее состояние"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "@ROOT@/.agents/skills/coordination/coord hook --client codex"
+timeout = 5
+statusMessage = "Координация: остановка — отмечает ожидание следующего запроса"
+
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "@ROOT@/.agents/skills/coordination/coord hook --client codex"
+timeout = 3
+statusMessage = "Координация: завершение — закрывает lease сессии"
