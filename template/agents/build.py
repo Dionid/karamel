@@ -261,6 +261,23 @@ class Builder:
                                   "those run in CI only — list lint, typecheck, unit and build commands")
         return errors
 
+    def repo_personal_base(self) -> list[str]:
+        """Errors in the optional ``personalBase`` flag of ``repos.json`` entries.
+
+        ``personalBase: true`` makes tasks of the repository fork from, and target,
+        ``<owner>-<branch>`` when the workspace owner is set (``git config
+        workspace.owner`` or ``WORKSPACE_OWNER``); the shell resolver reads it as
+        ``== true``. Anything but a JSON boolean would be read as "off" there, so a
+        quoted ``"true"`` or ``1`` is an error here instead of a silent no-op.
+        ``check`` reports these as drift, ``sync`` as warnings.
+        """
+        errors: list[str] = []
+        for repo, entry in self.manifest_repos().items():
+            if isinstance(entry, dict) and "personalBase" in entry and not isinstance(entry["personalBase"], bool):
+                errors.append(f"repos.json: {repo}.personalBase must be true or false, "
+                              f"not {entry['personalBase']!r}")
+        return errors
+
     def integration_detector(self) -> Any:
         """``analyze_command`` of the integration hook, executed without writing bytecode."""
         path = self.agents / "common" / "hooks" / "block-local-integration-tests.py"
@@ -482,7 +499,7 @@ class Builder:
         expected_links = self.links()
         expected_files = self.files()
         drift: list[str] = [f"skill-import:{error}" for error in self.repo_skills()[2]]
-        drift += [f"manifest:{error}" for error in self.repo_checks()]
+        drift += [f"manifest:{error}" for error in (*self.repo_checks(), *self.repo_personal_base())]
 
         try:
             self.validate_layout(expected_files)
@@ -653,13 +670,14 @@ def main() -> int:
         try:
             builder.sync()
             _, warnings, errors = builder.repo_skills()
-            errors = [*errors, *builder.repo_checks()]
+            errors = [*errors, *builder.repo_checks(), *builder.repo_personal_base()]
         except RuntimeError as error:
             print(f"runtime sync refused: {error}", file=sys.stderr)
             return 2
         # A skill that cannot be imported never stops sync: the workspace skill wins,
         # a missing directory is a repository not cloned or not merged yet. A bad
-        # `checks` entry is advice for agents, not a runtime file: also a warning.
+        # `checks` entry is advice for agents, not a runtime file: also a warning,
+        # and so is a non-boolean `personalBase`.
         for message in (*warnings, *errors):
             print(f"warning: {message}", file=sys.stderr)
         print("runtime trees synchronized")

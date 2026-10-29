@@ -273,6 +273,34 @@ def main() -> int:
               and "Traceback" not in broken.stderr, "checks: missing hook fails check loudly",
               broken.stdout + broken.stderr)
 
+        # (j) `personalBase`: optional JSON boolean; anything else is a check error
+        def with_personal_base(label: str, value: object) -> Path:
+            root = seed(base / f"personal-base-{label}", [])
+            manifest = json.loads((root / "repos.json").read_text())
+            manifest["repos"]["app"]["personalBase"] = value
+            (root / "repos.json").write_text(json.dumps(manifest))
+            return root
+
+        for label, value in (("true", True), ("false", False)):
+            root = with_personal_base(label, value)
+            synced = build(root, "sync")
+            check(synced.returncode == 0 and "personalBase" not in synced.stderr,
+                  f"personalBase {label}: sync is clean", synced.stdout + synced.stderr)
+            for mode in ("--in-place", "--scratch"):
+                ok = build(root, "check", mode)
+                check(ok.returncode == 0, f"personalBase {label}: check {mode} is clean", ok.stdout + ok.stderr)
+        for label, value in (("string", "true"), ("number", 1), ("null", None), ("list", [True])):
+            root = with_personal_base(label, value)
+            for mode in ("--in-place", "--scratch"):
+                refused = build(root, "check", mode)
+                check(refused.returncode == 1 and "manifest:repos.json: app.personalBase must be true or false"
+                      in refused.stderr and "Traceback" not in refused.stderr,
+                      f"personalBase {label}: check {mode} fails with a readable message",
+                      refused.stdout + refused.stderr)
+            synced = build(root, "sync")
+            check(synced.returncode == 0 and "warning: repos.json: app.personalBase" in synced.stderr,
+                  f"personalBase {label}: sync warns and exits 0", synced.stdout + synced.stderr)
+
         # a manifest whose `repos` is not an object is a readable error, not a traceback
         root = seed(base / "repos-list", [])
         (root / "repos.json").write_text('{"repos": []}\n')

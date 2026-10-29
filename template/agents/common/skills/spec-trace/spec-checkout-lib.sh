@@ -27,7 +27,7 @@
 # молча отвечает про другой проект.
 #
 # Подключается через `. "$(dirname "$0")/spec-checkout-lib.sh"`; требует
-# WORKSPACE_ROOT и функции commit-and-mr/lib.sh (repos_manifest), которые
+# WORKSPACE_ROOT и функции commit-and-mr/lib.sh (repos_manifest, resolve_task_base), которые
 # каждый вызывающий скрипт сам подключает раньше этого файла.
 
 SPEC_MARKER_DIR="${SPEC_MARKER_DIR:-openspec}"
@@ -55,14 +55,12 @@ manifest_has_repo() {
         "$manifest" 2>/dev/null || echo no)" == "yes" ]]
 }
 
-# repo_branch <name> — базовая ветка репозитория из repos.json, "main" когда
-# запись отсутствует или манифеста ещё нет.
+# repo_branch <name> — ветка, в которую целят PR репозитория: `branch` из
+# repos.json ("main", когда записи или манифеста нет) либо личная база
+# `<owner>-<base>` для репозитория с `personalBase`. Ответ даёт общий resolver
+# commit-and-mr/lib.sh (resolve_task_base) — тот же, что у run.sh и wt.
 repo_branch() {
-  local repo manifest
-  repo="$(basename "$1")"
-  manifest="$(repos_manifest "$WORKSPACE_ROOT")"
-  [[ -f "$manifest" ]] || { printf 'main\n'; return 0; }
-  jq -r --arg r "$repo" '.repos[$r].branch // "main"' "$manifest" 2>/dev/null || printf 'main\n'
+  resolve_task_base "$WORKSPACE_ROOT" "$(basename "$1")"
 }
 
 # spec_prefix_for <repo> — путь маркера внутри чекаута: `openspec` или

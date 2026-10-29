@@ -182,6 +182,66 @@ repos_manifest() {
   printf '%s\n' "$root/repos.json"
 }
 
+# workspace_owner <workspace_root> — префикс личной базы владельца воркспейса,
+# или пусто, когда личной базы нет.
+#
+# Источник — `git config workspace.owner` корня воркспейса. WORKSPACE_OWNER в
+# окружении процесса его переопределяет, и ЗАДАННАЯ, НО ПУСТАЯ переменная
+# (`WORKSPACE_OWNER=`) — это тоже ответ: личная база отключена целиком, что бы
+# ни стояло в git config. Владелец становится частью имени ветки, поэтому
+# допустимы только буквы, цифры, `.`, `_` и `-`; иначе — ошибка, а не тихий
+# откат к общей базе: задача, ушедшая не туда, видна только в чужом PR.
+workspace_owner() {
+  local root="${1:?workspace_owner: no workspace root}" owner
+  if [[ -n "${WORKSPACE_OWNER+x}" ]]; then
+    owner="$WORKSPACE_OWNER"
+  else
+    owner="$(git -C "$root" config --get workspace.owner 2>/dev/null || true)"
+  fi
+  [[ -n "$owner" ]] || return 0
+  if [[ ! "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$owner" == *..* || "$owner" == *. ]]; then
+    echo "error: workspace owner '$owner' (WORKSPACE_OWNER or git config workspace.owner) is not a branch-name prefix — use letters, digits, '.', '_' or '-'" >&2
+    return 1
+  fi
+  printf '%s\n' "$owner"
+}
+
+# resolve_task_base <workspace_root> <repo> [<base>] — ветка, от которой
+# ветвятся задачи <repo> и в которую целят их PR. Единственный resolver этого
+# ответа: wt (new/cleanup), adopt.sh, run.sh, preflight.sh, task-link.sh и
+# spec-trace зовут его, а не читают `branch` из repos.json сами.
+#
+# <base> — общая база репозитория. Без третьего аргумента это `branch` из
+# repos.json, а при отсутствии записи или поля — `main` (пустая строка
+# остаётся пустой, как и раньше). Третьим аргументом её передаёт вызывающий,
+# у которого свой fallback (wt: `origin/HEAD`).
+#
+# Личная база `<owner>-<base>` получается, только когда у записи repo стоит
+# `"personalBase": true`, владелец задан (workspace_owner) и <base> непуст.
+# Иначе печатается сама <base> — поведение воркспейса без владельца не меняется.
+resolve_task_base() {
+  local root="${1:?resolve_task_base: no workspace root}" repo="${2-}" base manifest personal="" owner
+  manifest="$(repos_manifest "$root")"
+  if (($# >= 3)); then
+    base="$3"
+  elif [[ -f "$manifest" && -n "$repo" ]]; then
+    base="$(jq -r --arg r "$repo" '.repos[$r].branch // "main"' "$manifest" 2>/dev/null || printf 'main\n')"
+  else
+    base=main
+  fi
+  if [[ -f "$manifest" && -n "$repo" && -n "$base" ]]; then
+    personal="$(jq -r --arg r "$repo" '.repos[$r].personalBase == true' "$manifest" 2>/dev/null || true)"
+  fi
+  if [[ "$personal" == true ]]; then
+    owner="$(workspace_owner "$root")" || return 1
+    if [[ -n "$owner" ]]; then
+      printf '%s-%s\n' "$owner" "$base"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$base"
+}
+
 # proj_of <worktree> — the GitHub project path of its `origin`, url-encoded.
 proj_of() {
   local remote
@@ -397,6 +457,33 @@ gl_push() {
   shift 2
 
   gl_git "$checkout" push "$@" -u origin "$branch"
+}
+
+# gl_create_remote_branch <checkout> <from-ref> <new-branch> — create
+# refs/heads/<new-branch> on origin at <from-ref>. A plain push of a refspec
+# without `+`: it never rewrites an existing branch. A GitHub origin goes through
+# gl_git (the token and the origin-match check); a local-path origin (a bare
+# repository on disk, as in tests) is pushed by plain git, exactly as
+# gl_remote_run already treats local URLs for fetch.
+gl_create_remote_branch() {
+  local checkout="$1" from="$2" new="$3" url
+  url="$(gl_origin_raw_url "$checkout" push)" || return 1
+  case "$url" in
+    file://*|/*|./*|../*) ;;
+    *://*|*:*) gl_git "$checkout" push --quiet origin "$from:refs/heads/$new"; return $? ;;
+  esac
+  GL_TRANSPORT=local
+  GIT_TERMINAL_PROMPT=0 git -C "$checkout" push --quiet origin "$from:refs/heads/$new"
+}
+
+# gl_remote_branch_state <checkout> <branch> — `present` or `absent` on origin;
+# return 1 (nothing printed) when origin could not be asked. `ls-remote` without
+# --exit-code, because its "no match" status 2 collides with gl_require_gh's
+# "network" 2 — output, not status, tells absent from unreachable.
+gl_remote_branch_state() {
+  local out
+  out="$(gl_git "$1" ls-remote --heads origin "refs/heads/$2")" || return 1
+  if [[ -n "$out" ]]; then printf 'present\n'; else printf 'absent\n'; fi
 }
 
 # gl_origin_projects_match <checkout> — fetch and push URLs must identify the

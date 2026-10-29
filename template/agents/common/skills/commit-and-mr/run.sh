@@ -303,7 +303,16 @@ fi
 
 proj="$PROJ_PATH"
 
-base="$(jq -r --arg r "$repo" '.repos[$r].branch // "main"' "$(repos_manifest "$workspace_root")")"
+# The PR target: the repo's base from repos.json, or the personal base
+# <owner>-<base> for a "personalBase" repo with an owner — one resolver for wt,
+# adopt.sh, preflight.sh, task-link.sh and spec-trace (lib.sh).
+base="$(resolve_task_base "$workspace_root" "$repo")" || exit 1
+
+# The personal base is a base branch too: work reaches it only through a PR.
+if [[ "$branch" == "$base" ]]; then
+  echo "error: refusing to push base branch: $branch" >&2
+  exit 1
+fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

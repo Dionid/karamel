@@ -117,18 +117,17 @@ fi
 self="${self#"worktrees/$task/"}"
 self="${self%/}"
 
-manifest="$(repos_manifest "$workspace")"
-
 # base_of <repo-name> — the branch its MRs target. From the manifest, because it
-# differs per repo (`development` in one, `main` in the next); `main` for a
-# checkout the manifest does not describe.
+# differs per repo (`development` in one, `main` in the next), or the personal
+# base <owner>-<base>; `main` for a checkout the manifest does not describe.
+# The shared resolver in lib.sh, so this never disagrees with run.sh.
 base_of() {
-  if [[ -f "$manifest" ]]; then
-    jq -r --arg r "$1" '.repos[$r].branch // "main"' "$manifest" 2>/dev/null || printf 'main\n'
-  else
-    printf 'main\n'
-  fi
+  resolve_task_base "$workspace" "$1"
 }
+
+# An unusable owner is reported once, here, rather than as an empty base inside
+# every `git log` range below.
+workspace_owner "$workspace" >/dev/null || exit 1
 
 # set_range <dir> <base> — the git log argument list, in RANGE_ARGS, and whether
 # the branch carries work of its own, in RANGE_AHEAD.

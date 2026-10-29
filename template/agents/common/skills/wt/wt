@@ -193,7 +193,8 @@ containing your current directory, and `rm`/`prune` default to EVERY repo of the
 task / every repo in packages/.
 
 `wt cleanup` removes, with their feature branches, the tasks whose work is
-already in the target branch — origin/<base> of each repo, fetched first. A
+already in the target branch — origin/<base> of each repo (or the personal
+base origin/<owner>-<base>, see below), fetched first. A
 task goes only when EVERY checkout of it is clean, on its branch (not detached,
 no rebase/merge in progress), holds no ignored files beyond rebuildable ones
 (node_modules, dist, symlinked .env*), and its HEAD is in the target — as an
@@ -223,6 +224,14 @@ leaves them out.
 
 --base defaults to the repo's "branch" in repos.json, else origin/HEAD.
 Branches are named feature/<task>.
+
+Personal base: for a repo with "personalBase": true in repos.json and an owner
+(`git config workspace.owner <prefix>` in the workspace root; WORKSPACE_OWNER
+overrides it, and an empty WORKSPACE_OWNER= switches the personal base off),
+`new` forks from origin/<owner>-<base> instead — creating that branch on origin
+once, from origin/<base>, when it is missing — and commit-and-mr targets it.
+An explicit --base is used as is. Merging <owner>-<base> into <base> is a
+human's PR.
 
 Staleness flags for `new` (default: refuse and tell you to pull):
   --pull           fast-forward packages/<repo> to origin/<base> first
@@ -636,6 +645,43 @@ base_for() {
   default_base "$repo"
 }
 
+# The branch a task of <repo> forks from: base_for, turned into the personal
+# base <owner>-<base> by the shared resolver (commit-and-mr/lib.sh
+# resolve_task_base) when the repo has "personalBase": true and an owner is set.
+# An explicit --base is the exact start point — adopt.sh passes the adopted
+# branch itself there — so no personal base is put on top of it.
+task_base_for() {
+  local repo="$1" base
+  base="$(base_for "$repo")"
+  if [ -n "$FLAG_BASE" ]; then echo "$base"; return 0; fi
+  resolve_task_base "$SCRIPT_DIR" "$repo" "$base"
+}
+
+# ensure_personal_base <repo> <base> <personal> — make origin/<personal> exist
+# and be fetched. Created ONCE, from origin/<base>, by a plain push of a new
+# branch (never a force); an existing one is only fetched, never moved —
+# bringing it up to date with <base>, and merging it into <base>, are a human's
+# pull requests. Offline, a known local origin/<personal> is used with a warning.
+ensure_personal_base() {
+  local repo="$1" base="$2" personal="$3" dir="$ROOT/$1" state
+  if state="$(gl_remote_branch_state "$dir" "$personal")"; then
+    if [ "$state" = absent ]; then
+      git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/${base}" \
+        || { err "[$repo] personal base $personal is not on origin, and there is no origin/$base to create it from"; return 1; }
+      info "[$repo] personal base origin/$personal does not exist — creating it once from origin/$base"
+      gl_create_remote_branch "$dir" "refs/remotes/origin/${base}" "$personal" \
+        || { err "[$repo] could not create $personal on origin (push refused?)"; return 1; }
+    fi
+    gl_fetch "$dir" "+refs/heads/${personal}:refs/remotes/origin/${personal}" --quiet \
+      || { err "[$repo] fetch of origin/$personal failed"; return 1; }
+  elif git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/${personal}"; then
+    warn "  could not ask origin about $personal (offline?) — branching off the local origin/$personal"
+  else
+    err "[$repo] could not ask origin whether personal base $personal exists, and there is no local copy"
+    return 1
+  fi
+}
+
 # How many commits of origin/<base> the packages/<repo> checkout is missing.
 # Not just an old start point: that tree is where the worktree's .env* and
 # node_modules are linked from, so "behind" means stale deps too. 0 when there
@@ -933,6 +979,16 @@ new_one() {
     fi
   fi
 
+  # The personal base <owner>-<base>: the freshness above is still judged on
+  # origin/<base> — that is what packages/<repo> tracks — but the task forks
+  # from (and its PR targets) the personal base.
+  local tbase
+  tbase="$(task_base_for "$repo")" || return 1
+  if [ "$tbase" != "$base" ]; then
+    ensure_personal_base "$repo" "$base" "$tbase" || return 1
+    startpoint="origin/${tbase}"
+  fi
+
   # Only now — an early return above must not leave an empty worktrees/<task>/.
   mkdir -p "$(dirname "$wt_dir")"
   info "[$repo] creating worktree ${wt_dir} on ${branch} (off ${startpoint})"
@@ -1157,7 +1213,8 @@ cmd_prune() {
 }
 
 # What `wt cleanup` makes of one checkout of a task, as one line:
-#   merged       its own commits are already in origin/<base>
+#   merged       its own commits are already in origin/<base> (or, for a
+#                personalBase repo with an owner, in origin/<owner>-<base>)
 #   empty        it never had commits of its own (HEAD is where the branch began)
 #   keep <why>   anything else
 # "Already in" means HEAD is an ancestor of the target (merge, fast-forward), or
@@ -1168,7 +1225,8 @@ cmd_prune() {
 # and ignored files that are not rebuildable. Every unclear case keeps, because
 # what it would delete may exist nowhere else.
 cleanup_verdict() {
-  local task="$1" sub="$2" repo dir base target branch cherry own born p ignored=""
+  local task="$1" sub="$2" repo dir base tbase targets target branch cherry own born p ignored=""
+  local present="" landed="" notin=""
   repo="$(basename "$sub")"
   dir="$(wt_path "$sub" "$task")"
   is_repo "$repo" || { echo "keep $sub: not a worktree of packages/ (clone-url?)"; return 0; }
@@ -1191,15 +1249,24 @@ cleanup_verdict() {
     ignored="${ignored:+$ignored, }$p"
   done < <(git -C "$dir" status --porcelain --ignored 2>/dev/null | grep '^!! ' || true)
   [ -z "$ignored" ] || { echo "keep $sub: ignored files that would be lost: $ignored"; return 0; }
-  base="$(base_for "$repo")"; target="origin/$base"
-  git -C "$dir" rev-parse --verify --quiet "$target^{commit}" >/dev/null \
-    || { echo "keep $sub: no $target to compare with"; return 0; }
-  if ! git -C "$dir" merge-base --is-ancestor HEAD "$target"; then
+  # Merged into <base> OR into the personal base <owner>-<base>: a task of a
+  # personalBase repo lands in the latter first, and the human's PR carries it on.
+  base="$(base_for "$repo")"
+  tbase="$(task_base_for "$repo")" || tbase="$base"
+  targets="origin/$base"
+  [ "$tbase" = "$base" ] || targets="$targets origin/$tbase"
+  for target in $targets; do
+    git -C "$dir" rev-parse --verify --quiet "$target^{commit}" >/dev/null || continue
+    present=1
+    if git -C "$dir" merge-base --is-ancestor HEAD "$target"; then landed="$target"; break; fi
     cherry="$(git -C "$dir" cherry "$target" HEAD 2>/dev/null)" \
       || { echo "keep $sub: git cherry against $target failed"; return 0; }
     own="$(grep -c '^+' <<< "$cherry" || true)"
-    [ "$own" = 0 ] || { echo "keep $sub: $own commit(s) not in $target"; return 0; }
-  fi
+    [ "$own" = 0 ] && { landed="$target"; break; }
+    notin="${notin:+$notin; }$own commit(s) not in $target"
+  done
+  [ -n "$present" ] || { echo "keep $sub: no ${targets// / or } to compare with"; return 0; }
+  [ -n "$landed" ] || { echo "keep $sub: $notin"; return 0; }
   # The oldest reflog entry of the branch is where `wt new` started it.
   born="$(git -C "$dir" reflog show --format=%H "refs/heads/$branch" 2>/dev/null | tail -n 1)"
   if [ -n "$born" ] && [ "$born" = "$(git -C "$dir" rev-parse HEAD)" ]; then
@@ -1230,7 +1297,7 @@ cmd_cleanup() {
   # One fetch per repo, not per checkout: tasks share repos, and the answer is
   # only as fresh as origin/<base>. A failed fetch leaves an older target, which
   # can only make a task look LESS merged, so it warns instead of stopping.
-  local fetched=$'\n' task sub repo base subs reasons r worked removed=0 kept=0 bad=""
+  local fetched=$'\n' task sub repo base tbase subs reasons r worked removed=0 kept=0 bad=""
   if [ "$FLAG_NO_FETCH" = 0 ]; then
     for task in "${todo[@]}"; do
       safe_task_path "$task" || continue
@@ -1244,6 +1311,9 @@ cmd_cleanup() {
         gl_use_repo "$repo"
         gl_fetch "$ROOT/$repo" "$base" --quiet >/dev/null 2>&1 \
           || warn "[$repo] could not fetch origin/$base — comparing with the local copy"
+        tbase="$(task_base_for "$repo")" || tbase="$base"
+        [ "$tbase" = "$base" ] || gl_fetch "$ROOT/$repo" "+refs/heads/${tbase}:refs/remotes/origin/${tbase}" --quiet >/dev/null 2>&1 \
+          || warn "[$repo] could not fetch personal base origin/$tbase — comparing with the local copy"
       done < <(task_repos "$task")
     done
   fi

@@ -25,5 +25,12 @@ staging. Commit hooks сохраняются. Запросы gh получают
 run с exit 3 и `NEXT=github-login`; ошибки доступа/сети дают ненулевой exit.
 Описание без открытого PR в режиме `--description-only` даёт exit 1.
 
+Цель PR (`TARGET_BRANCH` нового PR) — `branch` репозитория из `repos.json`
+(`main` без записи), а для репозитория с `"personalBase": true` при заданном
+владельце (`git config workspace.owner`, `WORKSPACE_OWNER`; пустая
+`WORKSPACE_OWNER=` отключает) — личная база `<owner>-<base>`. Ответ даёт
+`resolve_task_base` из `lib.sh`, тот же, что у `wt`. Push ветки, совпадающей с
+этой целью, `run.sh` отвергает так же, как push `main`.
+
 Coordination получает handoff только для подтверждённых PR после push.
 Неуспешный refresh task-link печатает предупреждение и команду повтора.

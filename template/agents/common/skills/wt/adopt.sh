@@ -174,12 +174,15 @@ base_of() {
 }
 
 # Is <sha> already contained in some origin ref? Checked against the adopted
-# branch, the blocker's own remote namesake and the repo's base — being an
+# branch, the blocker's own remote namesake, the repo's base and its personal
+# base <owner>-<base> (resolve_task_base, commit-and-mr/lib.sh) — being an
 # ancestor of any of them means deleting the local branch loses no commit.
 contained_in_origin() {
-  local repo="$1" sha="$2" name="$3" cand base
+  local repo="$1" sha="$2" name="$3" cand base tbase=""
   base="$(base_of "$repo")"
-  for cand in "origin/$BRANCH" "origin/$name" ${base:+"origin/$base"}; do
+  [ -z "$base" ] || tbase="$(resolve_task_base "$WS" "$repo" "$base")" || tbase=""
+  [ "$tbase" != "$base" ] || tbase=""
+  for cand in "origin/$BRANCH" "origin/$name" ${base:+"origin/$base"} ${tbase:+"origin/$tbase"}; do
     git -C "$ROOT/$repo" rev-parse --verify --quiet "$cand" >/dev/null 2>&1 || continue
     if git -C "$ROOT/$repo" merge-base --is-ancestor "$sha" "$cand" 2>/dev/null; then
       printf '%s\n' "$cand"; return 0

@@ -30,6 +30,7 @@ checkout. Для авторских знаний требуется ровно �
 | `postSetup` | массив Bash-строк; без поля пуст | `wt new`: после настройки зависимостей в свежем worktree. Ошибка останавливает setup и оставляет worktree для диагностики. |
 | `skills` | массив относительных путей каталогов; без поля `[]` | `agents/build.py`: sync линкует их из `packages/<repo>/` в оба runtime skill trees. Имя — basename пути. Абсолютный путь, пустой сегмент, `.`/`..`, пустой путь, symlink наружу или коллизия имён — ошибка check. Нет каталога/`SKILL.md` — warning; sync продолжает. |
 | `checks` | массив непустых строк; без поля — нет | Стандартные локальные проверки repo — lint, typecheck, unit, build, — которые агент запускает до отчёта, каждая отдельной командой с cwd checkout. Только для агента: `wt`/`clone` их не исполняют. Integration/e2e сюда не входят: они идут только в CI, и `agents/build.py` (`repo_checks`) считает ошибкой `check` не-массив, пустую или не-строковую запись и команду, которую отверг бы хук `block-local-integration-tests.py`; `sync` печатает это как warning. Нет поля — команды берутся из README и скриптов repo (`package.json`, `Makefile` и т. п.). |
+| `personalBase` | boolean; без поля `false` | `true` — задачи этого repo ветвятся от личной базы `<owner>-<branch>` (например, `ds-main`) и PR целят туда же, когда владелец задан: `git config workspace.owner <prefix>` в корне воркспейса, `WORKSPACE_OWNER` переопределяет, пустая `WORKSPACE_OWNER=` отключает. Без владельца — как без флага. `wt new` один раз создаёт личную базу на origin из `origin/<branch>`; `wt cleanup` считает задачу влитой в `<branch>` или в личную базу. Один resolver — `resolve_task_base` в `commit-and-mr/lib.sh`. Не-boolean значение — ошибка `check` (`agents/build.py`, `repo_personal_base`), `sync` печатает warning. Вливание личной базы в `<branch>` — PR человека. |
 | `knowledgeRoot` | непустая относительная POSIX-строка; default `knowledge` | Каталог авторских знаний относительно checkout. `knowledge/resolve.py` проверяет repos из `always`, кроме snapshot repo. Явное `"."` выбирает корень checkout; отсутствие поля по-прежнему означает `knowledge/`. Абсолютный путь, `..`, пустой путь, backslash и realpath наружу запрещены. Явно заданный отсутствующий каталог — ошибка; требуется один кандидат. `--allow-missing` предназначен для lint, не записи. |
 | `specRoot` | относительная строка; default `""` | **Родитель** `openspec/`, а не сам `openspec`. `""` означает `<repo>/openspec`. Наличие поля делает repo кандидатом в spec-store даже вне `always`; без поля кандидатом остаётся repo из `always`. Несколько stores выбираются по субъекту изменения. Абсолютные пути, `..` и realpath наружу отвергаются при routing. |
 
@@ -80,7 +81,10 @@ Repo-skills читаются с ветки checkout в `packages/`; правка
   выбор repos, URL и приобретение checkout.
 - [build.py](../../../build.py): `repo_skills` — пути, коллизии и предупреждения;
   `repo_checks` — тип `checks` и отказ integration/e2e через детектор
-  [хука](../../hooks/block-local-integration-tests.py).
+  [хука](../../hooks/block-local-integration-tests.py); `repo_personal_base` —
+  тип `personalBase`.
+- [commit-and-mr/lib.sh](../commit-and-mr/lib.sh): `resolve_task_base` и
+  `workspace_owner` — база задач и PR с учётом `personalBase`.
 - [knowledge resolver](../knowledge/resolve.py) — знания и проверка путей.
 - [spec routing](../spec/SKILL.md) и
   [spec-checkout-lib.sh](../spec-trace/spec-checkout-lib.sh) — stores и пути.

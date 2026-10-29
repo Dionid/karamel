@@ -45,7 +45,14 @@ case "$rc" in
   4) fail 'GH=refused' ;;
 esac
 branch="$(git -C "$worktree" branch --show-current 2>/dev/null || true)"
+# The PR target run.sh will use — the shared resolver, personal base included.
+base=''
+if [[ -n "$repo" ]]; then
+  if base="$(resolve_task_base "$root" "$repo")"; then note "BASE=$base";
+  else fail 'BASE=invalid-owner'; fi
+fi
 if [[ -z "$branch" ]]; then fail 'PUSH=detached';
+elif [[ -n "$base" && "$branch" == "$base" ]]; then fail "PUSH=base-branch $branch";
 elif ((failed == 0)); then
   if gl_push "$worktree" "$branch" --dry-run; then note "PUSH=ok $branch (${GL_TRANSPORT:-none})";
   else fail 'PUSH=failed'; fi
