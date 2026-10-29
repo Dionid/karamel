@@ -36,10 +36,16 @@ Skip empty / missing repos. Review all that exist, even if only one is dirty.
 
 ## 2. Collect the diff per repo
 
-For each `<repo>` under `worktrees/<task>/<repo>/`:
+For each `<repo>` under `worktrees/<task>/<repo>/`, run from the workspace root.
+The base comes from the shared resolver `resolve_task_base` in
+`commit-and-mr/lib.sh` — the same one `wt`, `run.sh` and `preflight.sh` use —
+never from `branch` in `repos.json` directly: a `personalBase` repo branches from
+and targets `<owner>-<branch>`, and a diff against the shared base would pull
+every commit of the personal base into the review. If the resolver fails
+(invalid workspace owner), stop and report its error instead of guessing a base.
 
 ```bash
-base="$(jq -r --arg r "<repo>" '.repos[$r].branch // "main"' repos.json)"
+base="$(bash -c '. .claude/skills/commit-and-mr/lib.sh && resolve_task_base "$PWD" "$1"' _ "<repo>")"
 git -C "worktrees/<task>/<repo>" fetch origin "$base" --quiet 2>/dev/null || true
 mb="$(git -C "worktrees/<task>/<repo>" merge-base HEAD "origin/$base" 2>/dev/null \
   || git -C "worktrees/<task>/<repo>" merge-base HEAD "$base")"

@@ -560,6 +560,46 @@ RUNNERS_VALUE = set("--with -p --python --project --directory --package --extra 
                     "--env-file --with-requirements --index --from".split())
 
 
+SHELL_LONG_ARG_OPTS = {"--rcfile", "--init-file"}
+
+
+def shell_options(shell: str, args: list[str]) -> tuple[bool, int]:
+    """Опции шелла → (есть ли `-c`, индекс первого неопционного аргумента).
+
+    `-o`/`-O`/`+o`/`+O` забирают значение, в том числе внутри связки:
+    `bash -euo pipefail -c '…'`. В bash/sh/dash/ksh каждая `o`/`O` связки
+    берёт по следующему слову; в zsh — остаток связки, если он непуст
+    (`-opipefail`), иначе следующее слово. Та же функция — в
+    block-force-push.py: хуки самодостаточны и не импортируют друг друга.
+    """
+    i, has_c = 0, False
+    while i < len(args):
+        a = args[i]
+        if a in ("--", "-"):
+            return has_c, i + 1
+        if a == "--command":
+            has_c, i = True, i + 1
+            continue
+        if a in SHELL_LONG_ARG_OPTS:
+            i += 2
+            continue
+        if a.startswith("--"):
+            i += 1
+            continue
+        if len(a) < 2 or a[0] not in "-+":
+            break
+        i += 1
+        flags = a[1:]
+        for k, ch in enumerate(flags):
+            if ch == "c" and a[0] == "-":
+                has_c = True
+            elif ch in "oO":
+                if shell == "zsh" and k < len(flags) - 1:
+                    break  # `-opipefail`: остаток связки — имя опции
+                i += 1
+    return has_c, i
+
+
 def unwrap(argv: list[str]) -> list[str] | None:
     """Снимает присваивания, ключевые слова и обёртки; None — команда не исполняет argv."""
     while argv:
@@ -597,11 +637,9 @@ def analyze_argv(argv: list[str], depth: int, stdin: list[str] | None = None) ->
     base, args = os.path.basename(argv[0]), argv[1:]
 
     if base in SHELLS:
-        for k, a in enumerate(args):
-            if not a.startswith("-") or a == "--":
-                break
-            if not a.startswith("--") and "c" in a[1:] and a[1:].isalpha():
-                return analyze_command(args[k + 1], depth + 1) if k + 1 < len(args) else None
+        has_c, i = shell_options(base, args)
+        if has_c:
+            return analyze_command(args[i], depth + 1) if i < len(args) else None
         for body in stdin or []:
             hit = analyze_command(body, depth + 1)
             if hit:

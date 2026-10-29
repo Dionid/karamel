@@ -60,7 +60,7 @@ workspace="$tmp/workspace"
 mkdir -p "$workspace"
 printf '{}\n' > "$workspace/harness.json"
 printf '%s\n' \
-  '{"repos":{"project":{"branch":"main"},"shared":{"branch":"main"},"docs":{"branch":"main"},"solo":{"branch":"main"}}}' \
+  '{"repos":{"project":{"branch":"main"},"shared":{"branch":"main"},"docs":{"branch":"main"},"solo":{"branch":"main"},"pb":{"branch":"main","personalBase":true}}}' \
   > "$workspace/repos.json"
 
 # The committer is config, the author is the environment: this runtime exports
@@ -195,6 +195,31 @@ single_stale="$(
       --self worktrees/solo-task/solo --stale-siblings
 )"
 check "a single-repo task warns about nothing" "" "$single_stale"
+
+# --- an unusable workspace owner -------------------------------------------
+# Only a personalBase repo needs the owner: a task without one still renders,
+# and a task with one fails loudly instead of logging against an empty base.
+rc=0
+bad_owner="$(
+  WORKSPACE_COORDINATION_ROOT="$workspace" WORKSPACE_OWNER='a b' \
+    bash "$skill/task-link.sh" --task solo-task --workspace "$workspace" \
+      --self worktrees/solo-task/solo 2>&1
+)" || rc=$?
+check "an invalid owner does not stop a task without personalBase repos" 0 "$rc"
+contains "an invalid owner still renders the author" "$bad_owner" \
+  '**Автор:** `managed runtime agent <author@example.com>`'
+
+mkdir -p "$workspace/worktrees/pb-task"
+seed "$workspace/worktrees/pb-task/pb"
+commit "$workspace/worktrees/pb-task/pb" "managed runtime agent" author@example.com "feat: pb"
+rc=0
+bad_owner_pb="$(
+  WORKSPACE_COORDINATION_ROOT="$workspace" WORKSPACE_OWNER='a b' \
+    bash "$skill/task-link.sh" --task pb-task --workspace "$workspace" \
+      --self worktrees/pb-task/pb 2>&1
+)" || rc=$?
+check "an invalid owner fails a task with a personalBase repo" 1 "$rc"
+contains "the failure names the owner" "$bad_owner_pb" "workspace owner 'a b'"
 
 # --- run.sh creates the PR with the block, then links every open PR --------
 #

@@ -120,7 +120,7 @@ WRAPPERS = {
     "noglob": set(),
     "nocorrect": set(),
 }
-SHELL_ARG_OPTS = {"-o", "-O", "+o", "+O", "--rcfile", "--init-file"}
+SHELL_LONG_ARG_OPTS = {"--rcfile", "--init-file"}
 SSH_ARG_FLAGS = set("BbcDEeFIiJLlmOoPpQRSWw")
 GIT_ARG_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
                 "--super-prefix", "--config-env"}
@@ -422,28 +422,48 @@ def strip_wrapper(base: str, rest: list[str], env: dict[str, str]) -> list[str] 
     return rest
 
 
-def shell_trigger(rest: list[str], heredocs: list[str], stdin: list[str] | None,
-                  env: dict[str, str], depth: int) -> str | None:
+def shell_options(shell: str, args: list[str]) -> tuple[bool, int]:
+    """Опции шелла → (есть ли `-c`, индекс первого неопционного аргумента).
+
+    `-o`/`-O`/`+o`/`+O` забирают значение, в том числе внутри связки:
+    `bash -euo pipefail -c '…'`. В bash/sh/dash/ksh каждая `o`/`O` связки
+    берёт по следующему слову; в zsh — остаток связки, если он непуст
+    (`-opipefail`), иначе следующее слово. Та же функция — в
+    block-local-integration-tests.py: хуки самодостаточны и не импортируют
+    друг друга.
+    """
     i, has_c = 0, False
-    while i < len(rest):
-        a = rest[i]
-        if a == "--":
-            i += 1
-            break
-        if a in SHELL_ARG_OPTS:
-            i += 2
-            continue
+    while i < len(args):
+        a = args[i]
+        if a in ("--", "-"):
+            return has_c, i + 1
         if a == "--command":
             has_c, i = True, i + 1
+            continue
+        if a in SHELL_LONG_ARG_OPTS:
+            i += 2
             continue
         if a.startswith("--"):
             i += 1
             continue
-        if len(a) > 1 and a[0] in "-+":
-            has_c = has_c or (a[0] == "-" and "c" in a[1:])
-            i += 1
-            continue
-        break
+        if len(a) < 2 or a[0] not in "-+":
+            break
+        i += 1
+        flags = a[1:]
+        for k, ch in enumerate(flags):
+            if ch == "c" and a[0] == "-":
+                has_c = True
+            elif ch in "oO":
+                if shell == "zsh" and k < len(flags) - 1:
+                    break  # `-opipefail`: остаток связки — имя опции
+                i += 1
+    return has_c, i
+
+
+def shell_trigger(shell: str, rest: list[str], heredocs: list[str],
+                  stdin: list[str] | None, env: dict[str, str],
+                  depth: int) -> str | None:
+    has_c, i = shell_options(shell, rest)
     if has_c:
         return script_trigger(rest[i], env, depth + 1) if i < len(rest) else None
     if i < len(rest):
@@ -511,7 +531,7 @@ def argv_trigger(argv: list[str], heredocs: list[str], stdin: list[str] | None,
             argv = unwrapped
             continue
         if base in SHELLS:
-            return shell_trigger(rest, heredocs, stdin, env, depth)
+            return shell_trigger(base, rest, heredocs, stdin, env, depth)
         if base == "eval":
             return script_trigger(" ".join(rest), env, depth + 1)
         if base == "ssh":

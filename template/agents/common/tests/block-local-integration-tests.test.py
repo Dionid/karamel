@@ -112,6 +112,15 @@ BLOCK = [
     "bash -c 'npm run e2e'",
     'sh -c "cd api && pytest tests/integration"',
     "bash -lc 'go test -run Integration ./...'",
+    "bash -o pipefail -c 'npm run test:e2e'",
+    "bash -eu -o pipefail -c 'npm run test:e2e'",
+    "bash -euo pipefail -c 'npm run test:e2e'",
+    "bash -oo pipefail nounset -c 'npm run test:e2e'",
+    "bash -O extglob -c 'npm run test:e2e'",
+    "bash -c +o pipefail 'npm run test:e2e'",
+    "sh -eo pipefail -c 'npm run test:e2e'",
+    "zsh -euo pipefail -c 'npm run test:e2e'",
+    "zsh -opipefail -c 'npm run test:e2e'",
     "eval 'npm run e2e'",
     "bash <<'EOF'\nnpm run e2e\nEOF",
     "if npm run e2e; then echo ok; fi",
@@ -132,6 +141,7 @@ BLOCK = [
 ALLOW = [
     # unit
     "npm test",
+    "bash -euo pipefail -c 'npm test'",
     "npm run test",
     "npm run test:unit",
     "yarn test",
