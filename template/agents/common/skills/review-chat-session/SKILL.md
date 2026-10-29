@@ -106,6 +106,16 @@ persistent pattern.
 When a decision already exists, update that entry's status and evidence in
 place. Do not append a second decision with different lifecycle state.
 
+## Background review on session end
+
+With `WORKSPACE_SESSION_REVIEW=1`, the SessionEnd hook `review-session-on-end.py`
+runs `claude -p` in the background with this skill over the finished session's
+transcript (sonnet, Read and Skill only, no MCP, turn and budget caps). In that
+mode the transcript is the only evidence, `.review-chat-session.md` is
+read-only, and the report goes to stdout. The hook saves it to the
+session-reports folder in ~/.claude as `<date>-<session_id>.md`. The flag is
+opt-in and set by a human; without it the hook does nothing.
+
 ## Boundaries
 
 - Never store credentials, tokens, raw `.env` values, full prompts, full tool
