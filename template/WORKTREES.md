@@ -272,6 +272,18 @@ shell, он не трогает; вложенные задачи (`worktrees/<ta
 поэтому такая задача остаётся с причиной в отчёте — её удаляют `wt rm` после
 проверки PR глазами. Сначала `--dry-run` и показ списка человеку, потом запуск.
 
+**Bookkeeping `agent-directed-routing`.** `worktrees/<task>/.agent-routing/`
+(у вложенной задачи — `worktrees/<task>/<sub>/.agent-routing/`) — не задача и не
+репозиторий: `list`, `doctor` и `cleanup` его не сканируют, а имя задачи с
+компонентом `.agent-routing` `wt` отвергает. Задачу удерживает «работа идёт»
+в любом таком каталоге на её пути или ниже: непустой `checkouts/`, запись
+ledger `ownership.json` не в `integrated`/`failed` (то есть
+`reserved`/`active`/`patch_ready`), нечитаемый ledger, файлы в `recovery/` или
+`journals/`. Тогда `cleanup` оставляет задачу с причиной, а `wt rm` отказывает;
+`--force` (только человек) удаляет и это bookkeeping — writer-checkout'ы с их
+регистрацией в git, ledger и recovery-bundles. Когда у каталога задачи не остаётся checkout'ов, `wt rm` убирает и
+простаивающий `.agent-routing/`, иначе он навсегда держал бы каталог.
+
 ```bash
 wt cleanup --dry-run      # что уйдёт и почему остальное остаётся
 wt cleanup                # все задачи в worktrees/

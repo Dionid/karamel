@@ -199,8 +199,10 @@ no rebase/merge in progress), holds no ignored files beyond rebuildable ones
 (node_modules, dist, symlinked .env*), and its HEAD is in the target — as an
 ancestor (merge, fast-forward) or as identical patches (rebase, cherry-pick) —
 and at least one checkout committed something. A task owned by a live
-coordination lease is never touched; a nested task (worktrees/<task>/<sub>/)
-is judged per sub. A squash merge of several commits leaves different patches
+coordination lease is never touched, nor one with agent-routing work under
+worktrees/<task>/.agent-routing/ (writer checkouts, live or unreadable ledger,
+recovery bundles, apply journals — rm refuses it too without --force); a
+nested task (worktrees/<task>/<sub>/) is judged per sub. A squash merge of several commits leaves different patches
 behind, so such a task is kept and reported — remove it with `wt rm` once you
 have checked the MR.
   @SELF@ cleanup --dry-run         # what would go, and why every other task stays
@@ -473,6 +475,11 @@ add_always() {
 # worktrees/<task>/<repo> — a checkout is a directory with a .git entry (a file
 # in a worktree), and the grouping directories above it are not checkouts.
 # With an argument, only the checkouts under worktrees/<arg>/.
+#
+# worktrees/<task>/.agent-routing/ is agent-directed-routing bookkeeping, not a
+# task: its checkouts/<agentPath> are disposable writer checkouts (each one a
+# real git worktree with its own .git entry), so the scan prunes the whole
+# directory — otherwise list/cleanup/doctor would call them tasks.
 wt_checkouts() {
   local scope="${1:-}" root="$WT_ROOT" g d
   [ -n "$scope" ] && root="$WT_ROOT/$scope"
@@ -483,7 +490,7 @@ wt_checkouts() {
     printf '%s\n' "${d#"$WT_ROOT"/}"
   done < <(find "$root" -maxdepth 5 \
              \( -name node_modules -o -name .dart_tool -o -name Pods \
-                -o -name build -o -name dist \) -prune \
+                -o -name build -o -name dist -o -name .agent-routing \) -prune \
              -o -name .git -prune -print 2>/dev/null | sort)
 }
 
@@ -496,6 +503,108 @@ task_repos() {
     [ -n "$sub" ] || continue
     printf '%s\n' "${sub#"$t"/}"
   done < <(wt_checkouts "$t")
+}
+
+# ------------------------------------------------------- agent-routing --------
+#
+# agent-directed-routing keeps, per task directory (the parent of the canonical
+# checkout — worktrees/<task>, or worktrees/<task>/<sub> for adopt.sh's nested
+# branches), a .agent-routing/ with:
+#   ownership.json   ledger; states reserved/active/patch_ready are live,
+#                    integrated/failed are terminal
+#   checkouts/       disposable writer checkouts (git worktrees)
+#   recovery/<agent> bundles of failed hops — the only copy of that patch
+#   journals/        apply journals of an integration that has not finished
+# Any of that means work is under way or not yet salvaged, so cleanup keeps the
+# task and rm refuses without --force.
+
+# Every .agent-routing/ at or below <dir>, one absolute path per line. Only
+# grouping directories are walked — a checkout (anything with a .git entry) is
+# never entered, so a repo's own files cannot pass for bookkeeping.
+routing_dirs() {
+  local d="$1" depth="${2:-4}" c
+  [ -d "$d/.agent-routing" ] && [ ! -L "$d/.agent-routing" ] && printf '%s\n' "$d/.agent-routing"
+  [ "$depth" -gt 0 ] || return 0
+  for c in "$d"/*/; do
+    c="${c%/}"
+    [ -d "$c" ] && [ ! -L "$c" ] || continue
+    [ -e "$c/.git" ] && continue
+    routing_dirs "$c" $((depth - 1))
+  done
+}
+
+# Live ledger entries in <ownership.json>: a number, or "unreadable". Anything
+# not provably terminal (unknown state, malformed entry) counts as live.
+ledger_live_count() {
+  command -v python3 >/dev/null 2>&1 || { echo unreadable; return 0; }
+  python3 -I -c 'import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        doc = json.load(f)
+    entries = doc["entries"]
+    if not isinstance(entries, list):
+        raise ValueError
+    print(sum(1 for e in entries
+              if not (isinstance(e, dict) and e.get("state") in ("integrated", "failed"))))
+except Exception:
+    print("unreadable")' "$1" 2>/dev/null || echo unreadable
+}
+
+# Why one .agent-routing/ holds its task, "; "-joined; empty when idle.
+routing_hold_reasons() {
+  local r="$1" label n reasons=""
+  label="${r#"$WT_ROOT"/}"
+  if [ -d "$r/checkouts" ]; then
+    n="$(find "$r/checkouts" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
+    [ "$n" = 0 ] || reasons="${reasons:+$reasons; }$n writer checkout(s) in $label/checkouts"
+  fi
+  if [ -e "$r/ownership.json" ]; then
+    n="$(ledger_live_count "$r/ownership.json")"
+    case "$n" in
+      0) ;;
+      unreadable) reasons="${reasons:+$reasons; }unreadable ledger $label/ownership.json" ;;
+      *) reasons="${reasons:+$reasons; }$n live ledger entr(ies) (reserved/active/patch_ready) in $label/ownership.json" ;;
+    esac
+  fi
+  if [ -d "$r/recovery" ] && [ -n "$(find "$r/recovery" ! -type d -print -quit 2>/dev/null)" ]; then
+    reasons="${reasons:+$reasons; }recovery bundle(s) in $label/recovery"
+  fi
+  if [ -d "$r/journals" ] && [ -n "$(find "$r/journals" ! -type d -print -quit 2>/dev/null)" ]; then
+    reasons="${reasons:+$reasons; }apply journal(s) in $label/journals"
+  fi
+  printf '%s' "$reasons"
+}
+
+# Why worktrees/<task> (with every nested sub-task) is held by agent routing.
+task_routing_holds() {
+  local r why reasons=""
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    why="$(routing_hold_reasons "$r")"
+    [ -n "$why" ] && reasons="${reasons:+$reasons; }$why"
+  done < <(routing_dirs "$WT_ROOT/$1")
+  printf '%s' "$reasons"
+}
+
+# Remove one .agent-routing/ whose task has no checkouts left. Idle bookkeeping
+# goes silently; held bookkeeping only with force=1, after each writer checkout
+# is removed and its registration pruned from the repo it was cut from.
+drop_routing() {
+  local r="$1" force="$2" why c common
+  why="$(routing_hold_reasons "$r")"
+  if [ -n "$why" ]; then
+    if [ "$force" != 1 ]; then warn "  kept ${r#"$WT_ROOT"/}: $why"; return 0; fi
+    warn "  --force: dropping ${r#"$WT_ROOT"/} ($why)"
+  fi
+  for c in "$r"/checkouts/* "$r"/checkouts/.[!.]*; do
+    [ -e "$c" ] || [ -L "$c" ] || continue
+    common=""
+    [ -e "$c/.git" ] && common="$(git_common_dir "$c")"
+    rm -rf "$c"
+    [ -n "$common" ] && git --git-dir="$common" worktree prune 2>/dev/null || true
+  done
+  rm -rf "$r"
+  info "  removed agent-routing bookkeeping ${r#"$WT_ROOT"/}"
 }
 
 # origin/HEAD is written once, at clone time, and git NEVER refreshes it — so a
@@ -849,6 +958,9 @@ cmd_new() {
   parse_args "$@"
   local task="${POS[0]:-}"
   [ -n "$task" ] || { err "task name required"; usage; exit 1; }
+  case "/$task/" in
+    */.agent-routing/*) err "bad task name: $task (.agent-routing is agent-routing bookkeeping)"; exit 1 ;;
+  esac
   local repos
   repos="$(resolve_new_repos | add_always_manifest)" || exit 1
   ensure_repos_for_new <<< "$repos" || exit 1
@@ -947,6 +1059,7 @@ cmd_rm() {
   parse_args "$@"
   local task="${POS[0]:-}"
   [ -n "$task" ] || { err "task name required"; usage; exit 1; }
+  safe_task_path "$task" || { err "bad task name: $task"; exit 1; }
 
   if [ -x "$COORD" ] && ! "$COORD" guard-remove "$task"; then
     err "task '$task' is still owned — finish/handoff the active session before removal"
@@ -965,6 +1078,19 @@ cmd_rm() {
   else
     repos="$all"
     warn "no --repo given — removing every repo of task '$task': $(echo $repos | tr '\n' ' ')"
+  fi
+
+  # Agent-routing work under the task (writer checkouts, live or unreadable
+  # ledger, recovery bundles, apply journals) is not ours to delete unasked.
+  local holds
+  holds="$(task_routing_holds "$task")"
+  if [ -n "$holds" ]; then
+    if [ "$FLAG_FORCE" != 1 ]; then
+      err "task '$task' has agent-routing work in progress: $holds"
+      err "  finish or recover it (agent-directed-routing writer.py recover), or pass --force to drop it"
+      exit 1
+    fi
+    warn "--force: removing despite agent-routing work: $holds"
   fi
 
   local r repo wt_dir branch args bad=""
@@ -990,10 +1116,30 @@ cmd_rm() {
     case "$r" in */*) rmdir "$(dirname "$wt_dir")" 2>/dev/null || true ;; esac
   done <<< "$repos"
 
-  # Drop worktrees/<task>/ if it is now empty, and with it the grouping dirs
-  # above it — a nested task name ("11-travel-rule/pos") leaves two behind.
+  # A task directory left with no checkouts keeps nothing its .agent-routing/
+  # could still serve: drop that bookkeeping (held one only with --force), or it
+  # would pin the directory forever. Inside the task first, deepest first…
+  local rd owner
+  while IFS= read -r rd; do
+    [ -n "$rd" ] || continue
+    owner="$(dirname "$rd")"
+    [ -z "$(wt_checkouts "${owner#"$WT_ROOT"/}")" ] || continue
+    drop_routing "$rd" "$FLAG_FORCE"
+  done < <(routing_dirs "$WT_ROOT/$task" | sort -r)
+
+  # …then drop worktrees/<task>/ if it is now empty, and with it the grouping
+  # dirs above it — a nested task name ("11-travel-rule/pos") leaves two
+  # behind. An idle .agent-routing/ of an emptied grouping dir goes with it;
+  # --force does not reach above the named task.
   local up="$WT_ROOT/$task"
-  while [ "$up" != "$WT_ROOT" ] && rmdir "$up" 2>/dev/null; do up="$(dirname "$up")"; done
+  while [ "$up" != "$WT_ROOT" ]; do
+    if [ "$up" != "$WT_ROOT/$task" ] && [ -d "$up/.agent-routing" ] \
+       && [ -z "$(wt_checkouts "${up#"$WT_ROOT"/}")" ]; then
+      drop_routing "$up/.agent-routing" 0
+    fi
+    rmdir "$up" 2>/dev/null || break
+    up="$(dirname "$up")"
+  done
   if [ -n "$bad" ]; then err "failed:$bad (dirty worktree? retry with --force)"; exit 1; fi
   return 0
 }
@@ -1113,6 +1259,8 @@ cmd_cleanup() {
     if [ -x "$COORD" ] && ! "$COORD" guard-remove "$task" 2>/dev/null; then
       reasons="owned by an active coordination lease"
     fi
+    r="$(task_routing_holds "$task")"
+    [ -z "$r" ] || reasons="${reasons:+$reasons; }agent routing: $r"
     case "$(pwd -P)/" in
       "$WT_ROOT/$task/"*) reasons="${reasons:+$reasons; }current directory is inside it" ;;
     esac
@@ -1476,13 +1624,16 @@ cmd_clone() {
 
 # ---------------------------------------------------------------- one-off ----
 
+# A task path is relative, stays under worktrees/, and never names the
+# agent-routing bookkeeping (.agent-routing/checkouts/<agent> is a writer's
+# disposable checkout, not a task).
 safe_task_path() {
   local value="$1" part
   local -a parts
   case "$value" in ""|/*|./*|../*|*/../*|*/..|*/./*|*'//'*) return 1 ;; esac
   IFS=/ read -r -a parts <<< "$value"
   for part in "${parts[@]}"; do
-    case "$part" in ""|.|..|*[!A-Za-z0-9._-]*) return 1 ;; esac
+    case "$part" in ""|.|..|.agent-routing|*[!A-Za-z0-9._-]*) return 1 ;; esac
   done
 }
 

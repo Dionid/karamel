@@ -186,6 +186,13 @@ ancestor of `origin/<base>` or `git cherry` finds every patch there — run
 tasks, tasks that never committed, non-rebuildable ignored files and
 squash-merged branches, and says why for each.
 
+`worktrees/<task>/.agent-routing/` (agent-directed-routing bookkeeping) is never a
+task or a repo. While it holds work — a writer checkout in `checkouts/`, a ledger
+entry not `integrated`/`failed`, an unreadable ledger, files in `recovery/` or
+`journals/`, nested `<task>/<sub>/` included — `cleanup` keeps the task and
+`rm` refuses; finish or `writer.py recover` it instead of reaching for `--force`.
+Idle bookkeeping goes with the task's last checkout.
+
 With no `--repo` it removes **every** repo of the task and the `worktrees/<task>/`
 dir. It refuses while your shell is inside that tree or a fresh agent lease owns
 the task. A worktree with untracked
