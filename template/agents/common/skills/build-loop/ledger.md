@@ -20,7 +20,8 @@ Spec: worktrees/<task>/<spec-repo>/<spec-root>/openspec/changes/<change-name>/
 
 ## Спека (spec-loop, шаги 1–4)
 - Изучение — analyst + architect параллельно; 7 вопросов после слияния
-- Вопросы — заданы 5 блокирующих; ответы в change/proposal.md
+- Вопросы — 2 блокирующих (модель данных, судьба существующих строк) заданы,
+  ответы в proposal.md; 4 неблокирующих → допущения в proposal.md/design.md
 - proposal.md — analyst
 - delta-спеки — analyst; feasibility от architect: 2 находки (backfill,
   публикуемый контракт одного из репозиториев) → requirement R3 переписан
@@ -37,9 +38,25 @@ Spec: worktrees/<task>/<spec-repo>/<spec-root>/openspec/changes/<change-name>/
 ```
 
 **Only the `ПАКЕТ ГОТОВ → build loop открыт` line licenses the build loop to start**, and only if it
-names the bundle that was actually validated and cross-read. `openspec status`
+names the bundle that was actually validated and cross-read. The root writes it
+itself — the bundle is accepted, no user approval — and starts the build loop in
+the same turn. `openspec status`
 says an artefact exists; nothing but this line says the bundle is complete. A legacy `УТВЕРЖДЁН` line
 written before this rule change counts as the same marker on resume.
+
+**Opt-in review stop.** Only when the user explicitly asked to see or approve the
+spec before code ([spec-loop §6](../spec-loop/SKILL.md#6-the-bundle-is-complete-and-the-handoff)),
+the `## Спека` section ends:
+
+```markdown
+- Ревью спеки до кода: да — по просьбе пользователя «покажи спеку до кода»
+- ПРИНЯТ пользователем — «ок», 2026-10-29
+- ПАКЕТ ГОТОВ → build loop открыт
+```
+
+A `Ревью спеки до кода: да — по просьбе…` line with no `ПРИНЯТ` after it is a
+bundle waiting on the user: dispatch nothing. A request for spec/tasks artefacts
+together with the implementation is not such a request — no line, no stop.
 
 **A Track A ledger refuses the build loop.** A spec written without
 implementation (Track A, see [spec-loop](../spec-loop/SKILL.md#track-a--a-spec-without-implementation))

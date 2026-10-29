@@ -405,11 +405,16 @@ build или CI includes. Closing reviewer отдельно оценивает �
 ### Track C
 
 Исполняют роли `spec-loop`/`build-loop`; root: гейты, проверка результата, ответ.
-До кода проведите **`spec-loop`**: read-only study, вопросы, proposal,
-delta specs, design и tasks. Согласование scope/вопросов с пользователем
-(в командах с work-items — Фича и Задачи) обязательно и идёт до спеки;
-отдельного approval самой спеки нет: готовый пакет автоматически передаётся
-в **`build-loop`**, который ведёт реализацию, tests, review и bounded fix rounds.
+До кода проведите **`spec-loop`**: read-only study, затем только действительно
+блокирующие вопросы (например, модель данных; в командах с work-items — и
+согласование Фичи и Задач), остальное — исследование или дефолт, записанный
+допущением; затем proposal, delta specs, design и tasks. После cross-read
+analyst/architect и чистого `openspec validate` root сам записывает пакет в ledger
+как принятый и в том же ходе передаёт **`build-loop`** (реализация, tests, review,
+bounded fix rounds); спека попадает в MR вместе с кодом. Остановка на approval
+спеки — явный opt-in: только если пользователь прямо попросил посмотреть или
+одобрить её до кода. Триггер «spec/tasks artefacts вместе с реализацией» такой
+остановки не означает; спека без реализации — Track A, где approval обязателен.
 
 ## Локальные настройки
 

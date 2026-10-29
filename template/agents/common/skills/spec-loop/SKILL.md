@@ -1,6 +1,6 @@
 ---
 name: spec-loop
-description: Провести шаги 1-4 спек-цикла для изменения, которому нужна согласованная спека до кода — параллельная разведка analyst+architect, вопросы пользователю, затем proposal → delta specs → design → tasks, написанные одним заходом с cross-read между ролями и автоматической передачей в build-loop без отдельного одобрения спеки. Использовать, когда изменению нужна спека до кода.
+description: Провести шаги 1-4 спек-цикла для изменения, которому нужна согласованная спека до кода — параллельная разведка analyst+architect, только блокирующие вопросы пользователю, затем proposal → delta specs → design → tasks, написанные одним заходом с cross-read между ролями и передачей в build-loop в том же ходе; остановка на одобрение спеки — только по явной просьбе пользователя. Использовать, когда изменению нужна спека до кода.
 ---
 
 # The spec loop
@@ -8,29 +8,23 @@ description: Провести шаги 1-4 спек-цикла для измен
 Steps 1 through 4 of a spec-first change: everything before a line of code
 exists. [`build-loop`](../build-loop/SKILL.md) takes over at step 5, and it
 starts only from a completed spec bundle (validated, cross-read and coverage
-closed) recorded in the ledger. There is no separate user approval of the spec:
-scope was agreed with the user before it was written (step 2). The exception is
-a spec without implementation — [Track A](#track-a--a-spec-without-implementation):
-approval mandatory, no `build-loop`.
+closed) recorded in the ledger. By default nobody approves the spec: only the
+blocking questions of step 2 stop the loop, and the complete bundle goes to
+`build-loop` in the same turn. A review stop before code is an explicit opt-in
+(§6); a spec without implementation is
+[Track A](#track-a--a-spec-without-implementation) — approval mandatory, no `build-loop`.
 
 Resolve the destination through the **`spec`** skill before dispatching either
-role. This skill assumes an OpenSpec-style spec repository: a `repos.json` entry that
-declares a `specRoot` and holds an `openspec/` directory — there can be several. Below, **`<spec-repo>`** is that repo's name and
-**`<spec-root>`** is the path *inside it* down to the directory that directly
-contains `openspec/` — its `specRoot` field, when set. **`specRoot` is
-optional**: unset or empty means `openspec/` sits at the repo's own root, and
-`<spec-root>` is then empty too. Either way `openspec`'s own `changes/` and
-`specs/` directories live at `worktrees/<task>/<spec-repo>/<spec-root>/openspec/`
-— never directly under `<spec-root>/`, the `openspec` segment is still there.
-
-If this workspace has the `spec-trace` skill, its `spec-checkout-lib.sh`
-(`find_spec_checkout`, `spec_prefix_for`) already resolves `<spec-repo>` and
-`<spec-root>` this way — read it rather than re-deriving the rule. Without that
-skill, do it by hand: for every `repos.json` entry declaring a `specRoot` (plus the `always` entries,
-addressed from the checkout root), check whether `<repo>/<its specRoot, if any>/openspec` exists in the
-worktree. No match means this loop has nowhere to write — stop and report it. Several matches is not a
-broken manifest: **the store follows the subject of the change**, so require exactly one *for the
-subject*; a subject spanning stores means stop, show the candidates, ask the user. Never write into both.
+role. **`<spec-repo>`** is the `repos.json` entry whose `openspec/` holds the
+subject of this change; **`<spec-root>`** is its optional `specRoot` (unset or
+empty: `openspec/` sits at the repo root). Either way `changes/` and `specs/`
+live at `worktrees/<task>/<spec-repo>/<spec-root>/openspec/` — the `openspec`
+segment is always there. If this workspace has `spec-trace`, its
+`spec-checkout-lib.sh` (`find_spec_checkout`, `spec_prefix_for`) already resolves
+this — read it rather than re-derive. No store in the worktree means nowhere to
+write: stop and report. **The store follows the subject**: several stores is not
+a broken manifest, but a subject spanning them means stop, show the candidates,
+ask the user. Never write into both.
 
 If the workspace has the **`work-items`** skill, the change must record its task per that skill (`task: <task>` in `.openspec.yaml`, a `Задача:` link under the proposal H1).
 
@@ -55,7 +49,7 @@ Two agent types, in [`../../roles/`](../../roles/), prompts in
   `## Порядок релиза` tables the build loop runs on.
 
 Neither writes code. Neither writes the other's files. **Each reads the other's
-work before it goes to the user** — that cross-read is why there are two of them.
+work before the bundle closes** — that cross-read is why there are two of them.
 
 ## 0. Before dispatching anything
 
@@ -100,32 +94,28 @@ rows that already exist**, in counts, and **what the running system does not
 have yet** that this design would need. Both change data models; found after
 the bundle is written they change them expensively.
 
-## 2. The questions — yours to ask, at least five
+## 2. The questions — only the blocking ones
 
-Merge both lists, drop the duplicates, drop anything whose answer would not change
-the spec, and rank what is left: **blocks writing** above **affects wording**.
+Merge both lists, drop the duplicates and anything whose answer would not change
+the spec. **Ask only what blocks writing** and no evidence settles — typically
+the data model, what happens to existing rows or money in flight, a published
+contract. Everything else is closed by the study or a sensible default and
+written as a labelled assumption in the artefact (listed in the ledger), not asked.
 
-Ask with `AskUserQuestion`, at most four per call, the blocking ones first. Give
-each option what it costs — "additive column now, backfill later" against "one
-destructive migration" is a decision the user can only make with the price
-attached. Ambiguity the agents flagged as an assumption is a question, not a
-footnote.
+Ask with `AskUserQuestion`, at most four per call. Give each option what it
+costs — "additive column now, backfill later" against "one destructive
+migration" is a decision the user can only make with the price attached.
 
-**Do not start writing before the blocking answers are in.** Non-blocking ones ride along
-in the same round, since there is no later review stop to carry them.
-
-**Scope agreement is mandatory and comes before the spec**: the questions above
-and, in teams that use work-items, the Feature (description) and its Tasks agreed
-in chat. This is the loop's only user gate; the bundle is then written and handed
-to `build-loop` without a further «ок».
+**Do not start writing before the blocking answers are in**; with none, go
+straight to step 3. In teams that use work-items, the Feature and its Tasks are
+agreed in chat at this same stop. Without the opt-in of §6 it is the loop's only
+user gate.
 
 ## 3–5. The artefacts, drafted together, handed off once
 
-The writing order below is not decorative — delta specs need `proposal.md`'s
-scope to write against, and design/tasks need the delta specs' requirements to
-build toward — but that order governs **drafting dependencies between the two
-agents**, not separate user gates: nothing here waits for the user, only
-the previous artefact's own content.
+The writing order is a **drafting dependency between the two agents** — delta
+specs write against `proposal.md`'s scope, design/tasks toward the delta specs —
+not a series of user gates: nothing here waits for the user.
 
 | # | Written by | What | Cross-read by | Then |
 |---|---|---|---|---|
@@ -145,8 +135,7 @@ once — and the author is allowed to push back with a technical reason instead
 of complying. A finding against `proposal.md` or the delta specs raised during
 the feasibility pass can still mean redrafting them before design starts; a
 finding against design/tasks from the coverage pass can mean redrafting those
-before the bundle is closed. None of this touches the user — it is still all
-inside this one pass.
+before the bundle is closed — all inside this one pass.
 
 **`openspec validate` after every write**, and read its output. An artefact
 that does not validate is not ready to hand to `build-loop`.
@@ -167,10 +156,18 @@ git -C worktrees/<task>/<repo> ls-files '<glob>'   # per group, per wave — do 
 
 Only when `openspec validate` is clean and the paths are checked is the bundle
 — `proposal.md`, the delta specs, `design.md`, `tasks.md` — complete. **Do not
-ask the user to approve it**: the scope was agreed at step 2, and the handoff to
-`build-loop` is automatic. Write to the ledger's `## Спека` section the literal
-line `ПАКЕТ ГОТОВ → build loop открыт`, with the findings from both cross-reads
-and how each was closed, and tell the user in one line that the build starts.
+ask the user to approve it**: you accept it yourself. Write to the ledger's
+`## Спека` section the literal line `ПАКЕТ ГОТОВ → build loop открыт`, with the
+findings from both cross-reads and how each was closed, tell the user in one
+line that the build starts, and **start `build-loop` in the same turn**.
+
+**The review stop is opt-in.** Only when the user explicitly asked to see or
+approve the spec before code does the loop stop here: the ledger gets
+`Ревью спеки до кода: да — по просьбе пользователя «<quote>»`, the bundle goes
+to the user, and only after their «ок» come `ПРИНЯТ пользователем — <quote, date>`
+and then the `ПАКЕТ ГОТОВ` line. A request for spec/tasks artefacts together
+with the implementation (`AGENTS.md` → Track C) is not that request; a spec
+with no implementation is Track A below.
 
 A significant bundle change after the handoff goes back through this loop with
 no re-approval; the ledger line is rewritten when the bundle is complete again.
@@ -180,8 +177,8 @@ move a group to a later wave without touching `tasks.md`. What it cannot do is
 invent a `## Порядок релиза` table that a multi-repo change never got.
 
 **No code in this loop, at all.** Not a scaffold, not a migration file, not "just
-the types". The spec repo is the only thing written, and it is committed with the
-code at the close — `commit-and-mr` picks it up at step 7, spec repo last.
+the types". The spec repo is the only thing written, and it ships in the task's
+MRs with the code at the close — `commit-and-mr` picks it up at step 7, spec repo last.
 
 ## Track A — a spec without implementation
 
@@ -202,10 +199,11 @@ user for a new approval. A request to implement the spec is Track C.
 - **an agent's question answered by you instead of by the user** — the one failure
   this whole loop is arranged to prevent
 - writing `proposal.md` before the blocking questions came back
-- asking the user to approve `proposal.md`, the delta specs, or the bundle —
-  the scope was agreed at step 2, and the handoff is automatic
-- fewer than five architectural questions, or five padded out with questions whose
-  answers change nothing
+- asking the user to approve `proposal.md`, the delta specs, or the bundle
+  without their explicit opt-in — a spec/tasks request with implementation is none
+- a non-blocking question put to the user instead of a labelled assumption, or a
+  blocking one (the data model) quietly settled as an assumption
+- `ПАКЕТ ГОТОВ` written and `build-loop` left for a later turn
 - a study of a change touching stored state that never looked at the real data,
   and did not say so
 - the `analyst` writing `tasks.md` or a table, the `architect` editing a

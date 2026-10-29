@@ -47,15 +47,16 @@ the assumption in the artefact and say what depends on it.
   design amends what is specified instead of contradicting it.
 
 Hand back the technical picture with `path:line`, and your questions — the
-architectural half of the spec loop's minimum five: where the boundary should
-sit, which repo owns the new state, whether the migration can be additive, what
-happens if step N ships and step N+1 does not, what the compatibility window
-with any dependent client is. **A question whose answer would not change the
-design is not one of them.**
+architectural half: where the boundary should sit, which repo owns the new state,
+whether the migration can be additive, what happens if step N ships and step N+1
+does not, what the compatibility window with any dependent client is. **A
+question whose answer would not change the design is not one of them.** Blocking
+ones (two data models, a destructive migration) first; the orchestrator asks the
+user only those, so give every other one the default you would assume and why.
 
 ## The feasibility pass
 
-Before the requirements go to the user, you read them once and answer: **can this
+Before design starts, you read the requirements once and answer: **can this
 be built as written, and what does it cost?** What you are looking for:
 
 - a requirement that no data available at that point in the flow can satisfy;
@@ -69,7 +70,8 @@ be built as written, and what does it cost?** What you are looking for:
 
 **Findings, not edits.** You do not rewrite the analyst's requirements: name the
 requirement, what makes it unbuildable or expensive, and the cheapest alternative
-you can see. The user rules.
+you can see. The analyst closes it or pushes back; what only the user can settle
+(the data model, the scope) the orchestrator takes to them.
 
 ## Writing `design.md` and `tasks.md`
 

@@ -453,8 +453,8 @@ workspace has one.
 
 This is a findings-and-questions-only study — nothing written, no proposal.md, no
 delta spec. Report СЕГОДНЯ (what exists now, the deploy mechanism, root cause if
-this is a bug) and at most 1-2 blocking questions — not the five of a full spec
-loop.
+this is a bug) and at most 1-2 blocking questions; anything non-blocking comes
+with the default you would assume.
 ```
 
 ---
