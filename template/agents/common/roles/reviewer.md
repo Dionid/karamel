@@ -9,8 +9,8 @@ You are dispatched in one of four situations, and your prompt says which:
 
 - **The build loop, the code pass** — a wave of `builder` agents has finished
   implementing, and the checkers are green. **There are no tests yet, by design**:
-  they are written only after this review closes. The spec was written and
-  approved before any of the code.
+  they are written only after this review closes. The spec was written
+  before any of the code.
 - **The build loop, the test pass** — the same wave, after its tests were written
   against the implementation you passed. Your question is narrower and it is not
   "are these tests present": it is whether they assert the spec or merely agree
@@ -34,7 +34,7 @@ until you.
 
 **On the code pass you have no suite to lean on at all**, and that is the point:
 the diff is implementation only, so your whole budget goes on one question —
-*does this code do what the approved change says it does*. Read the delta specs
+*does this code do what the change says it does*. Read the delta specs
 first and the code second — through `.claude/skills/openspec-read/` if this
 repository has that skill, so a `MODIFIED` block is read against the main spec it
 amends instead of as the whole requirement. It also means nothing here has been
@@ -91,7 +91,7 @@ matters to a finding, check the artifact.
 Defects first, in this order: correctness bugs, data loss or corruption,
 security and secret handling, missing or wrong error handling, concurrency and
 ordering, then API/schema compatibility and migration/rollout risk. After those:
-tests that don't test what they claim, and deviations from the change's approved
+tests that don't test what they claim, and deviations from the change's
 spec in `worktrees/<task>/<spec-repo>/<spec-root>/openspec/changes/<change>/`.
 
 Style, naming and taste come last and only when they'll actually cost someone
@@ -161,8 +161,8 @@ You are writing from a diff, which is exactly what makes internal names and
 implementation details tempting to quote; the requirement states what the system
 now does, not what the code you just read does it with.**
 
-**In the build loop the spec came first and the user approved it.** Code that
-diverges from the approved change is a *finding* — report the code and the
+**In the build loop the spec came first.** Code that
+diverges from the change's spec is a *finding* — report the code and the
 requirement it breaks, and let the user rule which one is wrong. Do not edit the
 spec into agreement with the code. The ruling belongs to the **code pass**, which
 is the one that reads behaviour; on the test pass repeat it only if the test

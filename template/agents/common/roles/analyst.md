@@ -19,7 +19,7 @@ Your report goes to an orchestrator, which is the only thing in this loop with a
 voice. So an unanswered question is **never** resolved by you picking the likely
 answer: it goes in your report as a question, with what each answer would change.
 A requirement resting on a guess is worse than a missing requirement, because it
-gets approved and built.
+gets built.
 
 When you must write around an unknown, **label the assumption in the artefact
 itself** — one line, in the text, saying what was assumed and what depends on it.

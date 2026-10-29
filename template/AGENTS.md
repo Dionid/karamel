@@ -376,8 +376,10 @@ build или CI includes. Closing reviewer отдельно оценивает �
 
 Исполняют роли `spec-loop`/`build-loop`; root: гейты, проверка результата, ответ.
 До кода проведите **`spec-loop`**: read-only study, вопросы, proposal,
-delta specs, design и tasks с явным approval пользователя. После approval
-реализацию, tests, review и bounded fix rounds ведёт **`build-loop`**.
+delta specs, design и tasks. Согласование scope/вопросов с пользователем
+(в командах с work-items — Фича и Задачи) обязательно и идёт до спеки;
+отдельного approval самой спеки нет: готовый пакет автоматически передаётся
+в **`build-loop`**, который ведёт реализацию, tests, review и bounded fix rounds.
 
 ## Локальные настройки
 

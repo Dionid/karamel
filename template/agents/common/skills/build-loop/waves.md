@@ -16,7 +16,7 @@ contain this change. **So it is a plan, not an input you trust**, and checking i
 is cheap: two `ls-files` per group against a wave of wasted wall-clock or a
 collision that costs the wave.
 
-It remains a pending plan until the final design/tasks approval gate records
+It remains a pending plan until the `ПАКЕТ ГОТОВ → build loop открыт` line in the ledger records
 it. Do not start builder work while you are only validating or displaying the
 table.
 

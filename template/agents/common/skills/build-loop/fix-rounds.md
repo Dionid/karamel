@@ -2,7 +2,7 @@
 
 Reference for §4 and §4b of [SKILL.md](SKILL.md), which carry the three rules you
 must not lose: only Blocking is dispatched, Should-fix waits for the user, and a
-finding contradicting the approved spec goes to the user immediately. This is how
+finding contradicting the spec goes to the user immediately. This is how
 a round runs and what the gate looks like.
 
 ## What a round is
@@ -105,7 +105,7 @@ them do the reading you already did.
   "ruled on at wave N, declined" and move on.
 - **A Blocking the user rules is a spec or design problem** → that is `spec-loop`
   again, not a coding round. Stop the wave, say what is stalled behind it, and let
-  them change the approved change.
+  them change the change's spec.
 
 Nothing else waits for the gate: the tail is reported, and phase 2 opens as soon
 as every item above has an outcome.
@@ -120,7 +120,7 @@ whole point of putting the wave's gate before the tests is that the wave then ru
 to its barrier without stopping again.
 
 Two things do not wait for the close, and they are the ones above: a **Blocking**
-that survived three rounds, and a finding that **contradicts the approved spec**.
+that survived three rounds, and a finding that **contradicts the spec**.
 Both go to the user immediately.
 
 A phase-2 Should-fix that is really about the *implementation* rather than the

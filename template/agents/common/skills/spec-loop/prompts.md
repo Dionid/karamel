@@ -23,12 +23,12 @@ child: first `writer.py spawn` it a disposable checkout of `{SPEC_REPO}` scoped 
 that checkout into the prompt as `{CHECKOUT}` together with the agent's
 `agentPath`. The templates below already use `{CHECKOUT}` literally; the agent
 writes only there and refuses to write if none is named. Then you `submit` and
-`integrate` the patch before the next artefact is cross-read or approved. A
+`integrate` the patch before the next artefact is cross-read or closed. A
 resumed agent is told its new checkout.
 
-This loop owns the spec-first change's steps through final design/tasks
-approval. Do not create or request builder work or wave assignments from these
-prompts; build-loop starts only after the final approval is recorded.
+This loop owns the spec-first change's steps through the complete bundle. Do
+not create or request builder work or wave assignments from these prompts;
+build-loop starts only after the complete bundle is recorded in the ledger.
 
 ---
 
@@ -46,7 +46,7 @@ minimum tier/effort: strong/high for each role (see agent-directed-routing)
 ```text
 Шаг 1 спек-цикла — изучение. Ничего не пишем: ни артефактов, ни кода.
 Не создавай builder cards/processes и не планируй wave assignment как действие:
-до final design/tasks approval они существуют только как будущий план в tasks.md.
+до завершения пакета спеки они существуют только как будущий план в tasks.md.
 
 Запрос пользователя, дословно:
 {REQUEST}
@@ -84,7 +84,7 @@ change `{CHANGE}` уже создан
 ```text
 Шаг 1 спек-цикла — изучение. Ничего не пишем: ни артефактов, ни кода.
 Не создавай builder cards/processes и не планируй wave assignment как действие:
-до final design/tasks approval они существуют только как будущий план в tasks.md.
+до завершения пакета спеки они существуют только как будущий план в tasks.md.
 
 Запрос пользователя, дословно:
 {REQUEST}
@@ -136,8 +136,8 @@ ownership.py check-write --agent-path {AGENT_PATH} <path>.
 
 Теперь напиши только `proposal.md` для change `{CHANGE}` в
 {CHECKOUT}/{SPEC_ROOT}/openspec/changes/{CHANGE}/. Ни delta-спек, ни design, ни tasks —
-они следующими шагами этого же захода, до пользователя всё равно дойдут вместе,
-одним пакетом на одно одобрение.
+они следующими шагами этого же захода, они пишутся одним пакетом, без отдельных
+остановок на согласование.
 
 cd {CHECKOUT}/{SPEC_ROOT}
 openspec instructions proposal --change {CHANGE} --json
@@ -160,7 +160,7 @@ openspec validate
 checkout не назван — ничего не пиши и сообщи об этом. Перед записью спорного пути:
 ownership.py check-write --agent-path {AGENT_PATH} <path>.
 
-`proposal.md` написан (ещё не показан пользователю). Теперь delta-спеки change
+`proposal.md` написан (cross-read пройден; пакет уйдёт в build-loop без показа пользователю). Теперь delta-спеки change
 `{CHANGE}` — и только они.
 
 cd {CHECKOUT}/{SPEC_ROOT}
@@ -214,7 +214,7 @@ Resume the study agent with `SendMessage`.
 checkout не назван — ничего не пиши и сообщи об этом. Перед записью спорного пути:
 ownership.py check-write --agent-path {AGENT_PATH} <path>.
 
-Delta-спеки написаны и прошли feasibility pass (ещё не показаны пользователю).
+Delta-спеки написаны и прошли feasibility pass (cross-read пройден; пакет уйдёт в build-loop без показа пользователю).
 Теперь `design.md` и `tasks.md` change `{CHANGE}` — и только они.
 
 Требования, по которым строишь design:

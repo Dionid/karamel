@@ -134,7 +134,7 @@ changes_dir="$spec_dir/$spec_prefix/changes"
 
 if [[ ! -d "$changes_dir" ]]; then
   echo "error: no OpenSpec changes directory: $changes_dir" >&2
-  echo "hint: the trace belongs to a change with approved spec artifacts; a task without one has nothing to write it into" >&2
+  echo "hint: the trace belongs to a change with spec artifacts; a task without one has nothing to write it into" >&2
   exit 1
 fi
 

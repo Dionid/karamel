@@ -20,7 +20,7 @@ build loop.
    Y at `file:line`".
 3. **Verify** it against the code — read the function, the call sites, the test.
 4. **Evaluate**: is it correct *for this codebase*, given its conventions,
-   compatibility constraints and the approved spec?
+   compatibility constraints and the change's spec?
 5. **Respond** — the fix, or reasoned pushback.
 6. **Implement** one finding at a time, running the relevant checker or test
    after each so you know which change did what.
@@ -48,7 +48,7 @@ Push back — do not silently comply — when the finding:
 
 - is factually wrong about what the code does;
 - breaks existing behaviour or a compatibility guarantee;
-- contradicts the approved spec in
+- contradicts the change's spec in
   `worktrees/<task>/spec-repo/openspec/changes/<change>/`;
 - asks for a feature nobody needs (YAGNI: validation for a case that cannot
   occur, configurability with one caller, an abstraction over one implementation);

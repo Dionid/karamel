@@ -1,13 +1,15 @@
 ---
 name: spec-loop
-description: Провести шаги 1-4 спек-цикла для изменения, которому нужна согласованная спека до кода — параллельная разведка analyst+architect, вопросы пользователю, затем proposal → delta specs → design → tasks, написанные одним заходом с cross-read между ролями и одним явным одобрением всего пакета. Использовать, когда изменение требует согласованной спеки прежде, чем появится код.
+description: Провести шаги 1-4 спек-цикла для изменения, которому нужна согласованная спека до кода — параллельная разведка analyst+architect, вопросы пользователю, затем proposal → delta specs → design → tasks, написанные одним заходом с cross-read между ролями и автоматической передачей в build-loop без отдельного одобрения спеки. Использовать, когда изменению нужна спека до кода.
 ---
 
 # The spec loop
 
 Steps 1 through 4 of a spec-first change: everything before a line of code
 exists. [`build-loop`](../build-loop/SKILL.md) takes over at step 5, and it
-starts only from a spec **the user approved**.
+starts only from a completed spec bundle (validated, cross-read and coverage
+closed) recorded in the ledger. There is no separate user approval of the spec:
+scope was agreed with the user before it was written (step 2).
 
 Resolve the destination through the **`spec`** skill before dispatching either
 role. This skill assumes an OpenSpec-style spec repository: a `repos.json` entry that
@@ -34,8 +36,8 @@ every question they raise is asked by you, and every answer reaches them only
 because you wrote it into their next prompt.
 
 During this loop only analyst/architect study and artifacts are allowed. **Do
-not start builder work or wave assignments before the final design/tasks
-approval is recorded.**
+not start builder work or wave assignments before the bundle is complete and
+recorded in the ledger.**
 
 Two agent types, in [`../../roles/`](../../roles/), prompts in
 [prompts.md](prompts.md):
@@ -71,8 +73,8 @@ analyst is even asked to write.
 **The ledger is shared with the build loop** — same file,
 `worktrees/<task>/.build-loop/progress.md`, a `## Спека` section above the waves.
 `openspec status --change <change>` says which artefacts exist; only the ledger
-says which ones the **user approved**, and that is the thing you must not lose to
-a compaction. Format: [ledger.md](../build-loop/ledger.md).
+says whether the bundle is complete and the build loop opened, and that is the
+thing you must not lose to a compaction. Format: [ledger.md](../build-loop/ledger.md).
 
 ## 1. The study — both agents, one message
 
@@ -92,7 +94,7 @@ state was not checked rather than proceeding as if the schema and the deployed
 state were known. Two answers must be in it before step 3: **what happens to the
 rows that already exist**, in counts, and **what the running system does not
 have yet** that this design would need. Both change data models; found after
-approval they change them expensively.
+the bundle is written they change them expensively.
 
 ## 2. The questions — yours to ask, at least five
 
@@ -105,24 +107,29 @@ destructive migration" is a decision the user can only make with the price
 attached. Ambiguity the agents flagged as an assumption is a question, not a
 footnote.
 
-**Do not start writing before the blocking answers are in.** Non-blocking ones can
-ride along with the first artefact review.
+**Do not start writing before the blocking answers are in.** Non-blocking ones ride along
+in the same round, since there is no later review stop to carry them.
 
-## 3–5. The artefacts, drafted together, approved once
+**Scope agreement is mandatory and comes before the spec**: the questions above
+and, in teams that use work-items, the Feature (description) and its Tasks agreed
+in chat. This is the loop's only user gate; the bundle is then written and handed
+to `build-loop` without a further «ок».
+
+## 3–5. The artefacts, drafted together, handed off once
 
 The writing order below is not decorative — delta specs need `proposal.md`'s
 scope to write against, and design/tasks need the delta specs' requirements to
 build toward — but that order governs **drafting dependencies between the two
-agents**, not separate user gates: nothing here reads back an approval, only
+agents**, not separate user gates: nothing here waits for the user, only
 the previous artefact's own content.
 
 | # | Written by | What | Cross-read by | Then |
 |---|---|---|---|---|
 | 3 | `analyst` | `proposal.md` — why, what changes, the capability, and **what is out of scope** | — | next artefact |
 | 4 | `analyst` | the delta specs — `### Requirement:` / `#### Scenario:`, `ADDED` / `MODIFIED` | `architect`, feasibility pass | next artefact |
-| 5 | `architect` | `design.md` + `tasks.md`, with both tables | `analyst`, coverage pass | bundle goes to the user |
+| 5 | `architect` | `design.md` + `tasks.md`, with both tables | `analyst`, coverage pass | `ПАКЕТ ГОТОВ → build loop открыт` |
 
-**The cross-read runs before the user sees anything**, in between the drafting
+**The cross-read runs before the bundle is closed**, in between the drafting
 steps above, not after the bundle is already assembled. The feasibility pass
 answers "can this be built as written, and what does it cost"; the coverage
 pass answers "does this design deliver every requirement, and does it
@@ -134,39 +141,35 @@ once — and the author is allowed to push back with a technical reason instead
 of complying. A finding against `proposal.md` or the delta specs raised during
 the feasibility pass can still mean redrafting them before design starts; a
 finding against design/tasks from the coverage pass can mean redrafting those
-before the bundle goes out. None of this touches the user — it is still all
+before the bundle is closed. None of this touches the user — it is still all
 inside this one pass.
 
 **`openspec validate` after every write**, and read its output. An artefact
-that does not validate is not ready for the user's time.
+that does not validate is not ready to hand to `build-loop`.
 
 Write artefacts in whatever language `<spec-repo>/<spec-root>/openspec/config.yaml`
 declares for specs; if it declares none, match the language the user has been
 using in this conversation.
 
-## 6. One approval, for the full bundle, and the handoff
+## 6. The bundle is complete, and the handoff
 
-Once both cross-reads are resolved, show the user all four artefacts together
-— `proposal.md`, the delta specs, `design.md`, `tasks.md` — plus the findings
-from both cross-reads and your recommendation per finding, and ask for **one**
-approval covering the whole bundle.
-
-Approval is **the user's explicit confirmation**, not your reading of their
-tone. "Ок", "поехали", "approved" is approval; "выглядит норм" on a bundle you
-asked five questions about is not. Record it in the ledger as covering the
-whole bundle.
-
-Approval is bound to the bundle the user saw; if any of proposal, specs,
-design, or tasks changes afterwards, the whole bundle goes back for
-re-approval — there is no partial approval to fall back on once any one
-artefact moved.
-
-Then, before `build-loop` gets it, verify the two things it cannot recover from:
+Once both cross-reads are resolved, verify the two things `build-loop` cannot
+recover from:
 
 ```bash
 cd worktrees/<task>/<spec-repo>/<spec-root> && openspec status --change <change> && openspec validate
 git -C worktrees/<task>/<repo> ls-files '<glob>'   # per group, per wave — do the paths overlap?
 ```
+
+Only when `openspec validate` is clean and the paths are checked is the bundle
+— `proposal.md`, the delta specs, `design.md`, `tasks.md` — complete. **Do not
+ask the user to approve it**: the scope was agreed at step 2, and the handoff to
+`build-loop` is automatic. Write to the ledger's `## Спека` section the literal
+line `ПАКЕТ ГОТОВ → build loop открыт`, with the findings from both cross-reads
+and how each was closed, and tell the user in one line that the build starts.
+
+A significant bundle change after the handoff goes back through this loop with
+no re-approval; the ledger line is rewritten when the bundle is complete again.
 
 `build-loop` re-checks the parallelism table against the code anyway, and it may
 move a group to a later wave without touching `tasks.md`. What it cannot do is
@@ -181,18 +184,18 @@ code at the close — `commit-and-mr` picks it up at step 7, spec repo last.
 - **an agent's question answered by you instead of by the user** — the one failure
   this whole loop is arranged to prevent
 - writing `proposal.md` before the blocking questions came back
-- asking the user to approve `proposal.md` or the delta specs on their own
-  before the rest of the bundle is drafted — that is the three-gate cadence
-  this loop exists to avoid
+- asking the user to approve `proposal.md`, the delta specs, or the bundle —
+  the scope was agreed at step 2, and the handoff is automatic
 - fewer than five architectural questions, or five padded out with questions whose
   answers change nothing
 - a study of a change touching stored state that never looked at the real data,
   and did not say so
 - the `analyst` writing `tasks.md` or a table, the `architect` editing a
   requirement to fit its design, either of them writing code
-- an artefact shown to the user without its cross-read, or a cross-read whose
+- an artefact handed to build-loop without its cross-read, or a cross-read whose
   findings were "resolved" by you
 - a multi-repo change handed to `build-loop` with no `## Порядок релиза` table, or
   a `## Параллелизм` table whose globs nobody resolved
-- **"looks fine" treated as approval**, or an approval nobody wrote in the ledger
+- a handoff to `build-loop` with no `ПАКЕТ ГОТОВ → build loop открыт` line in the ledger, or with
+  an unclosed cross-read finding
 - `openspec archive` — the change has not been built yet
