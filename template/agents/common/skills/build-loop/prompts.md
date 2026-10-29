@@ -170,9 +170,12 @@ worktrees/{TASK}/{SPEC_REPO}/{SPEC_ROOT}/openspec/changes/{CHANGE}/specs/
 expected списан с того, что вернул код, — это не тест, и следующее ревью
 нацелено ровно на это.
 
-Напиши и прогони те слои, которые есть в репозитории (читай его собственный
-package.json/README за реальными командами): unit и integration.
-E2E — только если пункты твоей группы в tasks.md просят об этом по имени; если
+Напиши тесты тех слоёв, которые есть в репозитории (читай его собственный
+package.json/README за реальными командами): unit и integration. Локально
+прогони только unit и стандартные checks репозитория (`checks` его записи в
+repos.json, иначе lint/typecheck/unit/build из README и скриптов). Integration
+и e2e идут только в CI: не запускай их и не поднимай для них стенд, в отчёте
+пиши «integration не запускались локально». E2E писать — только если пункты твоей группы в tasks.md просят об этом по имени; если
 не просят, не пиши ничего (ни spec, ни конфиг, ни CI job). Если в этом
 репозитории есть отдельный e2e-скилл, следуй ему, когда e2e действительно
 запрошен.
@@ -187,7 +190,8 @@ E2E — только если пункты твоей группы в tasks.md �
 правь тест и назови требование, которое он должен был утверждать. Не выгибай
 проверенный код под свежую ассерцию.
 
-Report red as red and a suite you could not run as "not run".
+Report red as red and a suite you could not run as "not run"; integration and
+e2e are «integration не запускались локально», never green.
 
 No commits, no pushes.
 ```
@@ -288,7 +292,8 @@ agree with the CODE? Concretely —
 - a test that still passes with the feature removed or the assertion deleted;
 - happy path only: no error case, no boundary, no empty result, no duplicate;
 - a suite skipped, .only'd or narrowed to stay green;
-- an integration test that stubs the very thing it exists to exercise.
+- an integration test that stubs the very thing it exists to exercise;
+- integration or e2e reported green from a local run — they run in CI only.
 
 Do NOT re-open the implementation — except here, which you must review as
 unreviewed code, because it changed after the code pass:
@@ -453,8 +458,8 @@ workspace has one.
 
 This is a findings-and-questions-only study — nothing written, no proposal.md, no
 delta spec. Report СЕГОДНЯ (what exists now, the deploy mechanism, root cause if
-this is a bug) and at most 1-2 blocking questions — not the five of a full spec
-loop.
+this is a bug) and at most 1-2 blocking questions; anything non-blocking comes
+with the default you would assume.
 ```
 
 ---

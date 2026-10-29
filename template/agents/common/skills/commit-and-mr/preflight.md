@@ -11,5 +11,10 @@
 Сетевая ошибка: `GH=unreachable`. Отсутствующий executable: `GH=missing`.
 Неподдерживаемые аргументы дают exit 2.
 
+С `--repo` печатается `BASE=<ветка>` — цель PR, которую возьмёт `run.sh`
+(`resolve_task_base`, личная база `<owner>-<base>` включительно); ветка checkout,
+совпадающая с ней, даёт `PUSH=base-branch`, а недопустимый владелец —
+`BASE=invalid-owner`.
+
 Проверка read-only: не сохраняет credentials, не меняет ветки и не делает commit.
 Dry-run не доказывает отсутствие всех серверных ограничений настоящего push.

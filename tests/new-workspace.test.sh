@@ -80,14 +80,34 @@ ok "clone и wt new создают worktrees/<task>/<repo> на ветке codex
 
 out="$("$NW" upgrade "$WS" --dry-run)"
 grep -q 'добавлено 0, обновлено 0, удалено 0' <<<"$out" || { echo "$out"; fail "upgrade сразу после create должен быть пустым"; }
+if grep -q 'differs' <<<"$out"; then echo "$out"; fail "differs без локальных правок"; fi
 ok "upgrade без изменений шаблона ничего не меняет"
 
 mkdir -p "$WS/agents/common/skills/gone"
 echo x > "$WS/agents/common/skills/gone/SKILL.md"
 echo "# local" >> "$WS/GIT.md"
+echo "# local rule" >> "$WS/agents/common/skills/wt/SKILL.md"
 echo "# team rule" >> "$WS/AGENTS.md"
 git -C "$WS" add -A && git -C "$WS" commit -qm wip
-"$NW" upgrade "$WS" > /dev/null
+
+# Список перезаписываемых локальных версий: в dry run и в upgrade, до записи.
+check_differs() { # <label> <output>
+  local label="$1" out="$2" f
+  for f in GIT.md agents/common/skills/wt/SKILL.md 'agents/common/skills/gone/SKILL.md (нет в шаблоне'; do
+    grep -qF "  differs $f" <<<"$out" || { echo "$out"; fail "$label: нет differs $f"; }
+  done
+  for f in AGENTS.md WORKTREES.md ops agents/common/skills/lint/lint.sh; do
+    if grep -qxF "  differs $f" <<<"$out"; then echo "$out"; fail "$label: лишний differs $f"; fi
+  done
+  [ "$(grep -n '  differs GIT.md' <<<"$out" | cut -d: -f1)" -lt "$(grep -n '  update GIT.md' <<<"$out" | cut -d: -f1)" ] \
+    || { echo "$out"; fail "$label: список differs не перед записью"; }
+}
+out="$("$NW" upgrade "$WS" --dry-run)"
+check_differs "dry run" "$out"
+grep -q '# local' "$WS/GIT.md" || fail "dry run перезаписал GIT.md"
+out="$("$NW" upgrade "$WS")"
+check_differs "upgrade" "$out"
+ok "upgrade печатает локальные отличия общего слоя (dry run и запись), без командных и нетронутых файлов"
 [ ! -e "$WS/agents/common/skills/gone" ] || fail "upgrade не удалил скилл, которого нет в шаблоне"
 cmp -s "$KARAMEL/template/GIT.md" "$WS/GIT.md" || fail "upgrade не вернул общий GIT.md"
 grep -q '# team rule' "$WS/AGENTS.md" || fail "upgrade перезаписал командный AGENTS.md"

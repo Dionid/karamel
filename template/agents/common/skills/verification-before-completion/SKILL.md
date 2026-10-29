@@ -49,8 +49,7 @@ Bash-style word splitting. Use literal arguments or an array expanded as
 | "Lint is clean" | `npm run lint …` exit 0 | typecheck passing |
 | "It compiles" | `npm run build` / `tsc -P …` exit 0 | lint passing — the linter is not the compiler |
 | "Unit tests pass" | `npm run test:unit -w <svc>`, 0 failed | a previous run, before your last edit |
-| "Integration tests pass" | `npm run test:int -w <svc>`, 0 failed | unit tests passing |
-| "E2E passes" | `npm run test:e2e -w <svc>` against a reachable `E2E_API_BASE_URL` | nothing. Unreachable env → **"not run"**, never "passing" |
+| "Integration tests pass" / "E2E passes" | the CI job for *that* commit, with its link — integration and e2e run in CI only | unit tests passing, or a local run. Not run in CI yet → **«integration не запускались локально»**, never "passing" |
 | "The bug is fixed" | the original failing reproduction, now green | the code looks right now |
 | "The regression test works" | red-green: revert the fix → test **fails** → restore → passes | the test passes once |
 | "The migration landed" | `db-query` against the real database | the migration file exists in the diff |
@@ -97,6 +96,7 @@ output as a failure. Never `--no-verify`, never edit the hook.
 | "The linter passed" | The linter does not compile, and does not run tests. |
 | "The agent said it succeeded" | Verify independently — `git diff` is cheap. |
 | "The e2e env is down, but it'd pass" | Then it is **not run**. Say that. |
+| "I'll just run integration locally to be sure" | Integration and e2e run in CI only; the human sets `WORKSPACE_ALLOW_LOCAL_INTEGRATION=1` and asks for a local run, and then it is reported as local at their request. |
 | "I ran it before the last edit" | The last edit is exactly what is unverified. |
 | "Different wording, so the rule doesn't apply" | Spirit over letter. Any implication of success is a claim. |
 

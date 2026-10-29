@@ -67,6 +67,14 @@ carries no sign of it — the file is there, the line number is plausible.
   directory on the same filesystem, verifies token-free origin, runs `git fsck`,
   and atomically renames the complete checkout into place. Partial checkouts are
   never used as a branch point.
+- **Personal base.** A repo with `"personalBase": true` in `repos.json`, in a
+  workspace whose owner is set (`git config workspace.owner <prefix>` in the
+  root; `WORKSPACE_OWNER` overrides it, an empty `WORKSPACE_OWNER=` turns it
+  off), forks from `origin/<owner>-<base>` (e.g. `ds-main`) and its PR targets
+  that branch. `wt new` creates it on origin once, from `origin/<base>`, if it
+  is missing, and never moves an existing one. Never set or change the owner
+  yourself, and never merge `<owner>-<base>` into `<base>` — that PR is the
+  human's. Details: `WORKTREES.md`, «Личная база».
 - **Don't pass dependency flags unless asked.** `deps` and `postSetup` in
   `repos.json` already say what each repo needs.
 - A failing repo doesn't abort the others: read the `created:` / `failed:` lines
@@ -180,11 +188,19 @@ Record the handoff through the `coordination` skill. Only then:
 ```
 
 To sweep every task whose work already reached its base branch — HEAD is an
-ancestor of `origin/<base>` or `git cherry` finds every patch there — run
+ancestor of `origin/<base>` (or of the personal base `origin/<owner>-<base>`)
+or `git cherry` finds every patch there — run
 `.claude/skills/wt/wt cleanup --dry-run`, show the user the list, then
 `.claude/skills/wt/wt cleanup`. It keeps dirty or detached checkouts, leased
 tasks, tasks that never committed, non-rebuildable ignored files and
 squash-merged branches, and says why for each.
+
+`worktrees/<task>/.agent-routing/` (agent-directed-routing bookkeeping) is never a
+task or a repo. While it holds work — a writer checkout in `checkouts/`, a ledger
+entry not `integrated`/`failed`, an unreadable ledger, files in `recovery/` or
+`journals/`, nested `<task>/<sub>/` included — `cleanup` keeps the task and
+`rm` refuses; finish or `writer.py recover` it instead of reaching for `--force`.
+Idle bookkeeping goes with the task's last checkout.
 
 With no `--repo` it removes **every** repo of the task and the `worktrees/<task>/`
 dir. It refuses while your shell is inside that tree or a fresh agent lease owns
@@ -202,7 +218,7 @@ Exits non-zero on a real problem, warns on a note. What it reports:
 
 | Reported | Meaning | Fix |
 | --- | --- | --- |
-| behind `origin/<base>` | `wt new` will refuse for that repo, and a Track A answer off it is stale | `.claude/skills/wt/wt pull --repo <repo>` |
+| behind `origin/<base>` | `wt new` will refuse for that repo, and a Track Q answer off it is stale | `.claude/skills/wt/wt pull --repo <repo>` |
 | in `repos.json`, not on disk | never cloned | `.claude/skills/wt/wt clone <name>` — the `clone` skill |
 | broken symlink in a worktree | its `.env`/`node_modules` target is gone | relink, or reinstall in `packages/<repo>` |
 | no `node_modules` in `packages/<repo>` | nothing to clone — the next `wt new` installs there once, then clones | nothing, or `.claude/skills/wt/wt seed --repo <repo>` to pay it now |

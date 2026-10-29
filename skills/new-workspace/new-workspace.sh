@@ -49,6 +49,8 @@ create options:
 
 upgrade перезаписывает общий слой из шаблона и не трогает командные файлы:
   ${TEAM_FILES[*]}
+До записи (и в --dry-run) upgrade печатает строки "differs <file>": общий слой,
+чья локальная версия отличается от шаблона и будет перезаписана.
 USAGE
 }
 
@@ -216,40 +218,61 @@ cmd_upgrade() {
     die "в $dir есть незакоммиченные правки: закоммитьте или отложите их, чтобы diff обновления был чистым"
   fi
 
-  local f changed=0 added=0 removed=0 skipped=0
+  # Сначала план, потом запись: список перезаписываемых локальных версий
+  # печатается до того, как upgrade тронет хоть один файл.
+  local f d
+  local -a adds=() updates=() removals=() keeps=()
+  local skipped=0
   while IFS= read -r f; do
     if in_list "$f" "${TEAM_FILES[@]}"; then
       skipped=$((skipped + 1))
       if ! in_list "$f" "${GENERATED_FILES[@]}" && [ -f "$dir/$f" ] && ! cmp -s "$TEMPLATE/$f" "$dir/$f"; then
-        printf '  keep   %s (командный файл, в шаблоне есть изменения — сверьте вручную)\n' "$f"
+        keeps+=("$f")
       fi
-      continue
-    fi
-    if [ ! -e "$dir/$f" ]; then
-      printf '  add    %s\n' "$f"; added=$((added + 1))
+    elif [ ! -e "$dir/$f" ]; then
+      adds+=("$f")
     elif ! cmp -s "$TEMPLATE/$f" "$dir/$f"; then
-      printf '  update %s\n' "$f"; changed=$((changed + 1))
-    else
-      continue
-    fi
-    if [ "$dry" = 0 ]; then
-      mkdir -p "$(dirname "$dir/$f")"
-      cp -p "$TEMPLATE/$f" "$dir/$f"
+      updates+=("$f")
     fi
   done < <(template_files)
-
-  local d
   for d in "${PRUNED_DIRS[@]}"; do
     [ -d "$dir/$d" ] || continue
     while IFS= read -r f; do
       f="${f#./}"
-      [ -e "$TEMPLATE/$f" ] && continue
-      printf '  remove %s\n' "$f"; removed=$((removed + 1))
-      [ "$dry" = 0 ] && rm -f "$dir/$f"
+      [ -e "$TEMPLATE/$f" ] || removals+=("$f")
     done < <(cd "$dir" && find "./$d" -type f | LC_ALL=C sort)
-    [ "$dry" = 0 ] && find "$dir/$d" -type d -empty -delete
   done
 
+  # Общий слой, чья локальная версия расходится с шаблоном: upgrade заменит её
+  # шаблонной, и локальные правки в ней пропадут. Командные файлы сюда не
+  # попадают — их upgrade не трогает.
+  if [ $((${#updates[@]} + ${#removals[@]})) -gt 0 ]; then
+    printf 'Локальная версия общего слоя отличается от шаблона — upgrade её перезапишет%s.\n' \
+      "$([ "$dry" = 1 ] && printf ' (в dry run — перезаписал бы)')"
+    printf 'Перенесите нужные локальные правки в upstream-шаблон или в командные файлы:\n'
+    for f in ${updates[@]+"${updates[@]}"}; do printf '  differs %s\n' "$f"; done
+    for f in ${removals[@]+"${removals[@]}"}; do printf '  differs %s (нет в шаблоне, будет удалён)\n' "$f"; done
+    printf '\n'
+  fi
+
+  for f in ${keeps[@]+"${keeps[@]}"}; do
+    printf '  keep   %s (командный файл, в шаблоне есть изменения — сверьте вручную)\n' "$f"
+  done
+  for f in ${adds[@]+"${adds[@]}"}; do printf '  add    %s\n' "$f"; done
+  for f in ${updates[@]+"${updates[@]}"}; do printf '  update %s\n' "$f"; done
+  for f in ${removals[@]+"${removals[@]}"}; do printf '  remove %s\n' "$f"; done
+  if [ "$dry" = 0 ]; then
+    for f in ${adds[@]+"${adds[@]}"} ${updates[@]+"${updates[@]}"}; do
+      mkdir -p "$(dirname "$dir/$f")"
+      cp -p "$TEMPLATE/$f" "$dir/$f"
+    done
+    for f in ${removals[@]+"${removals[@]}"}; do rm -f "$dir/$f"; done
+    for d in "${PRUNED_DIRS[@]}"; do
+      if [ -d "$dir/$d" ]; then find "$dir/$d" -type d -empty -delete; fi
+    done
+  fi
+
+  local added=${#adds[@]} changed=${#updates[@]} removed=${#removals[@]}
   printf '\nдобавлено %s, обновлено %s, удалено %s, командных файлов не тронуто %s%s\n' \
     "$added" "$changed" "$removed" "$skipped" "$([ "$dry" = 1 ] && printf ' (dry run)')"
   if [ "$dry" = 0 ] && [ $((added + changed + removed)) -gt 0 ]; then

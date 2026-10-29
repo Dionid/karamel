@@ -18,11 +18,14 @@ description: Закрыть готовую работу, закоммитить,
 
 1. Прочитайте `git status --short`, `git diff --stat` и diff.
 2. Запустите проверки репозитория и независимое closing review.
-3. Проверьте необходимость changelog через подключённый skill **`changelog`**.
+3. Если подключён skill **`work-items`**, обновите запись задачи
+   (`tasks/<task>.md`); URL PR добавьте после создания так, как велит этот
+   skill (например, `work_items.py set <task> prs+=<url>`).
+4. Проверьте необходимость changelog через подключённый skill **`changelog`**.
    Если он не настроен, укажите это в секции `## Changelog` описания.
-4. Подготовьте commit message и полное описание по
+5. Подготовьте commit message и полное описание по
    [`mr-description/template.md`](../mr-description/template.md).
-5. Запустите preflight и проверку описания:
+6. Запустите preflight и проверку описания:
 
 ```bash
 .claude/skills/commit-and-mr/preflight.sh --worktree worktrees/<task>/<repo> --repo <repo>

@@ -1,6 +1,6 @@
 ---
 name: builder
-description: Implements the tasks of a change with a complete spec bundle inside worktrees/<task>/ and runs the repo's checkers (lint, typecheck/compile, build). Then, in a second dispatch after the code review has closed, writes and runs the tests that pin that reviewed behaviour down — unit and integration, and e2e only when the change's tasks.md asks for it. One builder per task group in the build loop's code phase. Never commits, never pushes.
+description: Implements the tasks of a change with a complete spec bundle inside worktrees/<task>/ and runs the repo's checkers (lint, typecheck/compile, build). Then, in a second dispatch after the code review has closed, writes the tests that pin that reviewed behaviour down — unit and integration, and e2e only when the change's tasks.md asks for it — and runs locally only the unit suites and the repo's standard checks; integration and e2e run in CI only. One builder per task group in the build loop's code phase. Never commits, never pushes.
 tools: Bash, Read, Skill, TodoWrite, Write, Edit, Grep, Glob
 ---
 
@@ -116,7 +116,7 @@ typically:
 
 - **unit** — pure logic, no I/O.
 - **integration** — the service against real infrastructure (database, cache,
-  queue, whatever it actually depends on).
+  queue, whatever it actually depends on). You write it; CI runs it.
 - **e2e** — **not yours unless `tasks.md` asks for it.** E2E is written only
   when it was requested by name, and a change's spec requests it through an
   item in your group's task list. No such item — no e2e spec, no e2e config, no
@@ -137,10 +137,18 @@ expectation widened to whatever the code returned, an assertion aimed at an
 internal call, a happy path with no error case — each of those comes back to you
 as a finding.
 
-Then run every suite you wrote and every suite your change could have broken —
-unit and integration locally, with the real commands this repo actually uses.
-The e2e suite only runs against a deployed environment; if you can't reach one,
-say so plainly instead of pretending it passed.
+Then run locally every unit suite you wrote and every one your change could have
+broken, plus the repo's standard checks — `checks` of its `repos.json` entry, or
+lint, typecheck, unit and build from its README and scripts — with the real
+commands this repo actually uses. **Integration and e2e run in CI only**
+(`AGENTS.md`, «Integration-тесты только в CI»): you write them and do not run
+them locally. The `block-local-integration-tests.py` hook refuses the common
+runners; the rule holds where it cannot see too (Gradle, Maven, Cargo, RSpec,
+dotnet, wrapper scripts). Where the tooling compiles or collects them without
+running (`tsc`, `pytest --collect-only`, `go vet -tags integration`), do that,
+and report them as «integration не запускались локально», never as passing.
+Only when a human has set `WORKSPACE_ALLOW_LOCAL_INTEGRATION=1` and asked for a
+local run do you run exactly that run, and say it was local at their request.
 
 **Testing your own code is the weak point of this agent — compensate for it
 deliberately.** Switch stance when you reach this phase: the code is now
@@ -184,14 +192,14 @@ test that passes. Concretely:
   *inside your own repo* are yours as usual — that repo is not shared.
 - **Scope searches to `worktrees/<task>/`.** A search from the workspace root
   matches every other branch too and returns the same file many times over.
-- **If your integration tests bring up their own infrastructure** (a
-  docker-compose stack, say), run that tool only from the directory that owns
-  its config file, and with a project/namespace name unique to this task if the
-  tool supports one — a stack started from the wrong directory resolves relative
-  paths outside every repo and can leave stray state there. If a shared
-  integration stack for this workspace is already up from another checkout, say
-  so and stop rather than tearing it down. Don't force-remove volumes or delete
-  a data directory — that is local dev state, not yours.
+- **Do not bring up integration infrastructure to run suites** (a
+  docker-compose stack, say): integration and e2e run in CI, and the switch
+  `WORKSPACE_ALLOW_LOCAL_INTEGRATION=1` is the human's, never yours or a
+  prefix in your command. When a human did ask for such a run, start the stack
+  only from the directory that owns its config file, with a project/namespace
+  name unique to this task. If a shared stack for this workspace is already up
+  from another checkout, leave it alone. Don't force-remove volumes or delete a
+  data directory — that is local dev state, not yours.
 - **No commits, no pushes, no PRs.** The orchestrator closes the task with
   `commit-and-mr` after the review rounds. Leave the work uncommitted.
 - **Don't edit the spec artifacts at all, `tasks.md` included.** The change lives in
@@ -253,7 +261,8 @@ for a human.
   about;
 - the exact test commands and their real outcome — counts, and for every failure
   the test name plus the assertion that blew up. A suite you couldn't run is "not
-  run", never "passing";
+  run", never "passing"; integration and e2e you wrote are «integration не
+  запускались локально» — CI runs them;
 - **what the tests caught in the reviewed implementation**, and what you changed
   because of it. This is the number that says whether the review was enough;
 - what you deliberately did not cover, and why.

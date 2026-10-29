@@ -8,11 +8,10 @@ description: Провести build loop для OpenSpec change с готовы�
 Picks up where [`spec-loop`](../spec-loop/SKILL.md) leaves off: it starts only
 from a change whose spec bundle is complete (that loop's steps 1-4: validated,
 cross-read and coverage closed), and it is what makes that state resumable
-across compactions. You are the
-**orchestrator**: you dispatch agents, keep the ledger, and put in front of the
-user the few things only they can rule on. You do not implement, test or review
-the change yourself — doing it inline burns the context you need to keep
-driving.
+across compactions. You are the **orchestrator**: you dispatch agents, keep the
+ledger, and put in front of the user the few things only they can rule on. You
+do not implement, test or review the change yourself — doing it inline burns the
+context you need to keep driving.
 
 Like `spec-loop`, `<spec-repo>` is the `always` repo holding `openspec/`; its
 optional `specRoot` field is `<spec-root>`. Changes/specs live under
@@ -34,7 +33,13 @@ The code review checks implementation against the change's spec before tests
 are written. Phase 2 then measures what execution catches beyond static review.
 
 Prerequisites: existing worktree and a completed spec bundle (`openspec validate`
-ok, cross-read and coverage closed) recorded in the ledger as `ПАКЕТ ГОТОВ → build loop открыт`; user approval of the spec is not required. Read requirements
+ok, cross-read and coverage closed) that the root itself recorded as `ПАКЕТ ГОТОВ → build loop открыт`
+and handed over in the same turn; user approval of the spec is not required — only
+the user's explicit opt-in puts a `ПРИНЯТ` line before it ([ledger.md](ledger.md)).
+The spec ships in the task's MRs with the code (§7).
+**A ledger line `Ревью спеки до кода: да — Track A, без build-loop` means
+refuse** — no dispatch; implementing that spec is a new Track C task with its
+own `<task>` and ledger ([ledger.md](ledger.md)). Read requirements
 with `openspec-read` or `openspec show/status`; a `MODIFIED` delta amends the base
 spec. A missing or incomplete bundle means return to `spec-loop`, not dispatch
 builders; a significant spec change during the build goes back through

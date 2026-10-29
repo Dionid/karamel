@@ -98,7 +98,7 @@ class World:
 
     def spawn(self, agent: str, *scopes: str, parent: str = "root", depth: int = 1, tree: Path | None = None,
               parent_scopes: tuple[str, ...] = ("src", "docs"), lease: int | None = None) -> subprocess.CompletedProcess:
-        args = ["spawn", "--agent-path", agent, "--parent-path", parent, "--depth", str(depth), "--track", "B"]
+        args = ["spawn", "--agent-path", agent, "--parent-path", parent, "--depth", str(depth), "--track", "F"]
         for scope in scopes:
             args += ["--scope", scope]
         if parent == "root":
@@ -188,12 +188,31 @@ def test_reservation_and_overlap() -> None:
         world.close()
 
 
+def test_track_choices_include_writing_track_a_and_drop_old_letters() -> None:
+    """A writes architecture material through a disposable checkout; old B and read-only E are not writer tracks."""
+    world = World()
+    try:
+        base = ["spawn", "--parent-path", "root", "--depth", "1", "--parent-scope", "src", "--parent-scope", "docs"]
+        ok(world.w(*base, "--agent-path", "root/arch", "--track", "A", "--scope", "docs"), "Track A writer")
+        entry = world.entry("root/arch")
+        assert entry["track"] == "A" and entry["state"] == "reserved"
+        assert Path(entry["checkout"]).is_dir() and ".agent-routing/checkouts" in entry["checkout"]
+        for n, track in enumerate(("P", "Q", "F", "C", "H", "I")):
+            ok(world.w(*base, "--agent-path", f"root/t{n}", "--track", track, "--scope", f"src/new-{n}"), f"track {track}")
+        before = json.dumps(world.ledger())
+        for track in ("B", "E", "a"):
+            refused(world.w(*base, "--agent-path", f"root/x{track}", "--track", track, "--scope", "src/b"), f"track {track}")
+        assert json.dumps(world.ledger()) == before, "an unknown track must not touch the ledger"
+    finally:
+        world.close()
+
+
 def test_reservation_is_atomic_under_races() -> None:
     world = World()
     try:
         procs = [subprocess.Popen(
             [sys.executable, str(WRITER), "--repo-root", str(world.repo()), "spawn", "--agent-path", f"root/r{i}",
-             "--parent-path", "root", "--depth", "1", "--track", "B", "--scope", "src/a", "--parent-scope", "src"],
+             "--parent-path", "root", "--depth", "1", "--track", "F", "--scope", "src/a", "--parent-scope", "src"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=ENV) for i in range(6)]
         codes = sorted(p.wait() for p in procs)
         assert codes == [0, 2, 2, 2, 2, 2], f"exactly one racer may win the scope: {codes}"

@@ -17,7 +17,8 @@ would anyone know it does it.** Not how it is built — that is the `architect`.
 
 Your report goes to an orchestrator, which is the only thing in this loop with a
 voice. So an unanswered question is **never** resolved by you picking the likely
-answer: it goes in your report as a question, with what each answer would change.
+answer: it goes in your report as a question, with what each answer would change
+and, when it does not block writing, the default you would assume.
 A requirement resting on a guess is worse than a missing requirement, because it
 gets built.
 
@@ -61,15 +62,16 @@ numbers), **the requirement candidates** in one line each, **the questions**, an
 
 ### The questions are the product of the study
 
-A spec-first change demands at least five architectural questions before
-anything is written, and yours are the business half: which rule governs when
-two collide, what happens to money or state already in flight, who is allowed to
-do this, what the user sees when it fails, what the existing behaviour must keep
-doing. **A question whose answer would not change a requirement is not one of
-them** — drop it and say so.
+Yours are the business half: which rule governs when two collide, what happens
+to money or state already in flight, who is allowed to do this, what the user
+sees when it fails, what the existing behaviour must keep doing. **A question
+whose answer would not change a requirement is not one of them** — drop it and
+say so.
 
-Rank them: the ones that block writing anything first, the ones that only affect
-wording last.
+Rank them: **blocking** first — the answer changes the data model or what
+happens to existing state, and no evidence settles it. The orchestrator asks the
+user only those; for every other question give the default you would assume and
+why, because it becomes a labelled assumption in the artefact, not a question.
 
 ## Writing the artefacts
 
@@ -160,8 +162,8 @@ Read, in this order:
 
 Hand back: **what exists today** (file paths, the deploy mechanism, the
 current behaviour), **root cause** if this is a bug, and **at most 1-2
-blocking questions** — not the five of a full spec loop. A question whose
-answer would not change what gets built is not one of them.
+blocking questions** — the same blocking-only rule as the spec loop. A question
+whose answer would not change what gets built is not one of them.
 
 ## Boundaries
 

@@ -31,6 +31,14 @@ Runtime state хранится локально в `.coordination/`, игнор�
 target branch PR, которые вернул gh. `release <task>` снимает задачу только с текущей
 сессии.
 
+Личная база (`"personalBase": true` в `repos.json` и владелец из
+`git config workspace.owner`/`WORKSPACE_OWNER`, см. «Личная база» в
+`WORKTREES.md`) на координацию не влияет: `claim`, `heartbeat` и `finish`
+ключуются по `<task>`, а не по ветке. Видна она в handoff — target branch PR,
+который сохраняет `record-mr`, у такого репозитория равен `<owner>-<base>`
+(например, `ds-main`), а не `<base>`; checkpoint `finish --outcome mr` называет
+эту цель. Вливание `<owner>-<base>` в `<base>` — PR человека, не задача агента.
+
 `gc` удаляет только старые terminal coordination records; dry-run является
 дефолтом:
 
@@ -43,6 +51,7 @@ Coordination не проверяет GitHub PR state и не удаляет work
 Удалять worktree можно через
 `wt rm` только после отдельного человеческого подтверждения, что PR завершён,
 и локальной проверки чистоты checkout. Исключение — `wt cleanup`: он удаляет
-только чистые задачи без живой lease, чей HEAD уже есть в `origin/<base>`,
+только чистые задачи без живой lease, чей HEAD уже есть в `origin/<base>`
+или в личной базе `origin/<owner>-<base>`,
 так что доказательство даёт сам git, а не догадка о PR; список его
 `--dry-run` человек видит до запуска.

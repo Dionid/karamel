@@ -69,17 +69,21 @@ again: **resume each
 group's phase-1 `builder` with `SendMessage`** (pointing it at a new checkout — the
 old one was removed on integration) where it survives — it holds the
 code it just wrote and the findings it just closed — and only spawn a fresh one
-where it does not. Each writes the suites its repo's layers call for, runs them,
-and drives them green.
+where it does not. Each writes the suites its repo's layers call for, runs the
+unit suites and the repo's standard checks locally, and drives them green.
+Integration and e2e are written but run in CI only (`AGENTS.md`,
+«Integration-тесты только в CI»): the report and the ledger say «integration не
+запускались локально», never green.
 
 - **Tests trace to the delta spec, not to the code.** The builder is writing
   against reviewed code, which makes reading behaviour off it legitimate; reading
   the *expected values* off a run does not become legitimate with it. The test
   review is aimed at exactly that difference.
-- **If two groups' integration tests share one piece of infrastructure** (a
+- **If two groups' locally-run suites share one piece of infrastructure** (a
   single docker-compose stack with fixed container names or ports, say), they
-  collide even from different repos' worktrees when run at once. Phase 2 is
-  where every group of the wave wants to run its suites at once — dispatch those
+  collide even from different repos' worktrees when run at once. Integration
+  suites never do — they run in CI — but a unit suite or a standard check can.
+  Phase 2 is where every group of the wave wants to run its suites at once — dispatch those
   groups one after the other and record why. This is also why a wave plan keeps
   such groups apart in the first place (§2 of the body); when it did not, this is
   where the bill arrives. No shared resource → nothing to serialise.

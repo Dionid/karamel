@@ -83,6 +83,18 @@
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/block-workspace-deletion.sh\"",
             "timeout": 10,
             "statusMessage": "Защита воркспейса — блокирует удаление корня и общего каталога"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/block-force-push.py\"",
+            "timeout": 10,
+            "statusMessage": "Защита истории — блокирует force-push в любой форме, включая обёртки и составные команды"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/block-local-integration-tests.py\"",
+            "timeout": 10,
+            "statusMessage": "Integration только в CI — блокирует локальный запуск integration/e2e тестов"
           }
         ]
       },
@@ -141,6 +153,12 @@
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/skills/coordination/coord\" hook --client claude",
             "timeout": 5,
             "statusMessage": "Координация: завершение — закрывает lease сессии"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/review-session-on-end.py\"",
+            "timeout": 5,
+            "statusMessage": "Ревью сессии — при WORKSPACE_SESSION_REVIEW=1 запускает фоновый review-chat-session над завершённой сессией"
           }
         ]
       }

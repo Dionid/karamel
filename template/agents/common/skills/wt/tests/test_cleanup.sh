@@ -59,9 +59,40 @@ printf 'db\n' > "$WS/worktrees/kept-data/demo/local-data/pg"
 add_task nest/a;   commit "$WS/worktrees/nest/a/demo" nest-a-work
 add_task nest/b;   printf 'wip\n' > "$WS/worktrees/nest/b/demo/untracked"
 
+# agent-directed-routing bookkeeping: worktrees/<task>/.agent-routing/ beside
+# the canonical checkouts. Every task below is merged, so only the bookkeeping
+# can keep it.
+# ledger <task-dir> <state>... — ownership.json with one entry per state.
+ledger() {
+  local dir="$WS/worktrees/$1/.agent-routing" st list="" i=0; shift
+  mkdir -p "$dir/checkouts" "$dir/recovery" "$dir/journals" "$dir/locks"
+  : > "$dir/ownership.json.lock"
+  for st in "$@"; do
+    i=$((i + 1)); list="${list:+$list,}{\"agentPath\":\"root/w$i\",\"state\":\"$st\"}"
+  done
+  printf '{"version":2,"entries":[%s]}\n' "$list" > "$dir/ownership.json"
+}
+# writer <task-dir> — a real disposable writer checkout (a git worktree).
+writer() {
+  g "$D" worktree add --detach "$WS/worktrees/$1/.agent-routing/checkouts/root~w1" origin/main
+}
+ROUTED="rt-checkout rt-reserved rt-active rt-patch rt-bad rt-recovery rt-journal rt-idle rn/a rn/b"
+for t in $ROUTED; do add_task "$t"; commit "$WS/worktrees/$t/demo" "$(tr / - <<< "$t")-work"; done
+ledger rt-checkout active; writer rt-checkout
+ledger rt-reserved integrated reserved
+ledger rt-active integrated active
+ledger rt-patch failed patch_ready
+mkdir -p "$WS/worktrees/rt-bad/.agent-routing"; printf '{not json' > "$WS/worktrees/rt-bad/.agent-routing/ownership.json"
+ledger rt-recovery failed; mkdir -p "$WS/worktrees/rt-recovery/.agent-routing/recovery/root~w1"
+printf 'diff\n' > "$WS/worktrees/rt-recovery/.agent-routing/recovery/root~w1/_patch.diff"
+ledger rt-journal integrated; printf '{}\n' > "$WS/worktrees/rt-journal/.agent-routing/journals/root~w1.json"
+ledger rt-idle integrated failed
+ledger rn/a active      # nested: worktrees/<task>/<sub>/.agent-routing
+ledger rn/b integrated
+
 # merged доезжает до main как есть, rebased — тем же патчем, но другим SHA.
 g "$TMP/seed" pull --quiet origin main
-for t in merged mixed kept-data nest/a; do
+for t in merged mixed kept-data nest/a $ROUTED; do
   g "$TMP/seed" fetch "$WS/worktrees/$t/demo" "feature/$t"
   g "$TMP/seed" merge --no-edit FETCH_HEAD
 done
@@ -73,7 +104,13 @@ g "$TMP/seed" push origin main
 run() { (cd "$WS" && bash agents/common/skills/wt/wt "$@"); }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# A writer checkout is not a task: neither list nor cleanup may report one.
+out="$(run list 2>&1)" || fail "list exited non-zero: $out"
+grep -q 'agent-routing\|root~w1' <<< "$out" && fail "list shows agent-routing as a task/repo: $out"
+
 out="$(run cleanup --dry-run 2>&1)" || fail "dry-run exited non-zero: $out"
+grep -Eq '(^keep   |would remove )[^ ]*(\.agent-routing|root~w1)' <<< "$out" \
+  && fail "dry-run treats a writer checkout as a task: $out"
 for t in merged rebased open dirty empty mixed det kept-data nest/a nest/b; do
   [ -d "$WS/worktrees/$t/demo" ] || fail "dry-run removed $t"
 done
@@ -96,6 +133,61 @@ expect empty 'nothing committed yet'
 expect det 'demo: detached HEAD'
 expect kept-data 'demo: ignored files that would be lost: local-data'
 expect nest/b 'demo: uncommitted changes'
+
+# Agent routing holds a merged task: one case per reason.
+for t in rt-checkout rt-reserved rt-active rt-patch rt-bad rt-recovery rt-journal rn/a; do
+  [ -d "$WS/worktrees/$t/demo" ] || fail "$t was removed despite agent-routing work: $out"
+  [ -d "$WS/worktrees/$t/.agent-routing" ] || fail "bookkeeping of $t was removed: $out"
+done
+[ -d "$WS/worktrees/rt-checkout/.agent-routing/checkouts/root~w1" ] || fail "writer checkout removed"
+expect rt-checkout 'agent routing: 1 writer checkout(s) in rt-checkout/.agent-routing/checkouts'
+expect rt-reserved 'agent routing: 1 live ledger entr(ies) (reserved/active/patch_ready)'
+expect rt-active 'agent routing: 1 live ledger entr(ies)'
+expect rt-patch 'agent routing: 1 live ledger entr(ies)'
+expect rt-bad 'agent routing: unreadable ledger rt-bad/.agent-routing/ownership.json'
+expect rt-recovery 'agent routing: recovery bundle(s) in rt-recovery/.agent-routing/recovery'
+expect rt-journal 'agent routing: apply journal(s) in rt-journal/.agent-routing/journals'
+expect rn/a 'agent routing: 1 live ledger entr(ies) (reserved/active/patch_ready) in rn/a/.agent-routing'
+# Terminal-only bookkeeping goes with the last checkout instead of pinning the dir.
+[ ! -e "$WS/worktrees/rt-idle" ] || fail "rt-idle (or its .agent-routing) survived: $(ls -A "$WS/worktrees/rt-idle")"
+[ ! -e "$WS/worktrees/rn/b" ] || fail "rn/b (nested, idle bookkeeping) survived"
+
+# Once the writer checkout is gone, the same task is removed with its bookkeeping.
+g "$D" worktree remove --force "$WS/worktrees/rt-checkout/.agent-routing/checkouts/root~w1"
+ledger rt-checkout integrated
+out="$(run cleanup rt-checkout 2>&1)" || fail "cleanup rt-checkout failed: $out"
+[ ! -e "$WS/worktrees/rt-checkout" ] || fail "rt-checkout kept after its writer finished: $out"
+
+# Bookkeeping is never a task path.
+out="$(run cleanup rt-active/.agent-routing/checkouts/root~w1 2>&1)" && fail "cleanup accepted .agent-routing path"
+grep -q 'bad task name' <<< "$out" || fail "no bad-task-name for .agent-routing path: $out"
+out="$(run rm rt-active/.agent-routing 2>&1)" && fail "rm accepted .agent-routing path"
+grep -q 'bad task name' <<< "$out" || fail "rm: no bad-task-name for .agent-routing path: $out"
+out="$(run new x/.agent-routing --repo demo 2>&1)" && fail "new accepted .agent-routing path"
+grep -q 'bad task name' <<< "$out" || fail "new: no bad-task-name for .agent-routing path: $out"
+
+# wt rm refuses without --force while a writer checkout exists, nested ledger included.
+add_task rt-force; ledger rt-force active; writer rt-force
+out="$(run rm rt-force 2>&1)" && fail "rm removed a task with a writer checkout: $out"
+grep -q 'agent-routing work in progress' <<< "$out" || fail "rm refusal not explained: $out"
+[ -d "$WS/worktrees/rt-force/demo" ] && [ -d "$WS/worktrees/rt-force/.agent-routing/checkouts/root~w1" ] \
+  || fail "refused rm still removed something"
+out="$(run rm rn 2>&1)" && fail "rm of the outer task ignored the nested ledger of rn/a: $out"
+[ -d "$WS/worktrees/rn/a/demo" ] || fail "refused rm rn removed rn/a"
+out="$(run rm rt-force --force 2>&1)" || fail "rm --force failed: $out"
+[ ! -e "$WS/worktrees/rt-force" ] || fail "rm --force left $(ls -A "$WS/worktrees/rt-force")"
+git -C "$D" worktree list | grep -q 'rt-force' && fail "writer checkout registration survived rm --force"
+
+# Bookkeeping stays while a checkout of the task remains, goes with the last one,
+# and an emptied grouping dir's idle .agent-routing goes too.
+add_task rt-two; add_task rt-two specs; ledger rt-two integrated
+out="$(run rm rt-two --repo specs 2>&1)" || fail "rm --repo specs failed: $out"
+[ -d "$WS/worktrees/rt-two/.agent-routing" ] || fail "bookkeeping dropped while demo remains"
+out="$(run rm rt-two 2>&1)" || fail "rm of the last checkout failed: $out"
+[ ! -e "$WS/worktrees/rt-two" ] || fail "rt-two left behind: $(ls -A "$WS/worktrees/rt-two")"
+add_task rp/x; ledger rp integrated; ledger rp/x integrated
+out="$(run rm rp/x 2>&1)" || fail "rm rp/x failed: $out"
+[ ! -e "$WS/worktrees/rp" ] || fail "rp grouping dir left behind: $(find "$WS/worktrees/rp")"
 
 # Явно названная задача трогается одна, остальные не перечисляются.
 out="$(run cleanup open 2>&1)" || fail "named cleanup exited non-zero: $out"

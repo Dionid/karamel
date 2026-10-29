@@ -28,6 +28,24 @@ command = "@ROOT@/.agents/hooks/block-workspace-deletion.sh"
 timeout = 10
 statusMessage = "Защита воркспейса — блокирует удаление корня и общего каталога"
 
+# History protection: force-push is a human-only action, in any spelling.
+[[hooks.PreToolUse]]
+matcher = "Bash|shell|local_shell|exec_command|unified_exec"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "@ROOT@/.agents/hooks/block-force-push.py"
+timeout = 10
+statusMessage = "Защита истории — блокирует force-push в любой форме, включая обёртки и составные команды"
+
+# Integration and e2e run in CI only; a human sets WORKSPACE_ALLOW_LOCAL_INTEGRATION=1 to lift it.
+[[hooks.PreToolUse]]
+matcher = "Bash|shell|local_shell|exec_command|unified_exec"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "@ROOT@/.agents/hooks/block-local-integration-tests.py"
+timeout = 10
+statusMessage = "Integration только в CI — блокирует локальный запуск integration/e2e тестов"
+
 [[hooks.SessionStart]]
 [[hooks.SessionStart.hooks]]
 type = "command"

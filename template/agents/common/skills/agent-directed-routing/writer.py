@@ -728,7 +728,7 @@ def main() -> int:
     spawn.add_argument("--agent-path", required=True)
     spawn.add_argument("--parent-path", required=True)
     spawn.add_argument("--depth", type=int, required=True)
-    spawn.add_argument("--track", choices=("A", "P", "B", "C", "H", "I"), required=True)
+    spawn.add_argument("--track", choices=("A", "P", "Q", "F", "C", "H", "I"), required=True)
     spawn.add_argument("--scope", action="append", default=[])
     spawn.add_argument("--parent-scope", action="append", default=[], help="group/parent scopes; required unless the parent is itself a ledger writer")
     spawn.add_argument("--lease-seconds", type=int, default=ledger.DEFAULT_LEASE_SECONDS)

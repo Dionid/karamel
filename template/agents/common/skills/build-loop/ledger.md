@@ -20,7 +20,8 @@ Spec: worktrees/<task>/<spec-repo>/<spec-root>/openspec/changes/<change-name>/
 
 ## Спека (spec-loop, шаги 1–4)
 - Изучение — analyst + architect параллельно; 7 вопросов после слияния
-- Вопросы — заданы 5 блокирующих; ответы в change/proposal.md
+- Вопросы — 2 блокирующих (модель данных, судьба существующих строк) заданы,
+  ответы в proposal.md; 4 неблокирующих → допущения в proposal.md/design.md
 - proposal.md — analyst
 - delta-спеки — analyst; feasibility от architect: 2 находки (backfill,
   публикуемый контракт одного из репозиториев) → requirement R3 переписан
@@ -37,9 +38,40 @@ Spec: worktrees/<task>/<spec-repo>/<spec-root>/openspec/changes/<change-name>/
 ```
 
 **Only the `ПАКЕТ ГОТОВ → build loop открыт` line licenses the build loop to start**, and only if it
-names the bundle that was actually validated and cross-read. `openspec status`
+names the bundle that was actually validated and cross-read. The root writes it
+itself — the bundle is accepted, no user approval — and starts the build loop in
+the same turn. `openspec status`
 says an artefact exists; nothing but this line says the bundle is complete. A legacy `УТВЕРЖДЁН` line
 written before this rule change counts as the same marker on resume.
+
+**Opt-in review stop.** Only when the user explicitly asked to see or approve the
+spec before code ([spec-loop §6](../spec-loop/SKILL.md#6-the-bundle-is-complete-and-the-handoff)),
+the `## Спека` section ends:
+
+```markdown
+- Ревью спеки до кода: да — по просьбе пользователя «покажи спеку до кода»
+- ПРИНЯТ пользователем — «ок», 2026-10-29
+- ПАКЕТ ГОТОВ → build loop открыт
+```
+
+A `Ревью спеки до кода: да — по просьбе…` line with no `ПРИНЯТ` after it is a
+bundle waiting on the user: dispatch nothing. A request for spec/tasks artefacts
+together with the implementation is not such a request — no line, no stop.
+
+**A Track A ledger refuses the build loop.** A spec written without
+implementation (Track A, see [spec-loop](../spec-loop/SKILL.md#track-a--a-spec-without-implementation))
+records instead:
+
+```markdown
+- Ревью спеки до кода: да — Track A, без build-loop
+- closing review — worktree-review: 0 blocking; receiving-code-review закрыт
+- ПРИНЯТ пользователем — «ок, спека готова», 2026-10-29
+```
+
+If the ledger has a line containing `Track A, без build-loop`, refuse: dispatch
+nothing, write nothing in the ledger, and tell the root that implementing this
+spec is a new Track C task with its own `<task>` and ledger. Neither `ПРИНЯТ` nor a `ПАКЕТ ГОТОВ` line next to
+it licenses a build.
 
 ## Reading a half-finished wave off it
 
@@ -71,9 +103,9 @@ be attributed after a compaction.
 - Ф1 W2 ЗАКРЫТА — все находки фазы кода с исходом → фаза 2
 - Ф2 G2 builder — dispatched; Ф2 G3 builder — dispatched
 - Ф2 G3 builder — complete — 6 unit green; код не двигал
-- Ф2 G2 builder — complete — 14 unit / 5 integration green; **код правил**:
-  fee.ts:88 (integration поймал округление, ревью не увидело); e2e NOT RUN
-  (не просили)
+- Ф2 G2 builder — complete — 14 unit green; 5 integration написаны,
+  не запускались локально (CI); **код правил**: fee.ts:88 (unit поймал
+  округление, ревью не увидело); e2e не писали (не просили)
 - Ф2 W2 ревью тестов — 2 should-fix (findings-w2-tests.md); SPEC: unaffected
 - Ф2 W2 should-fix НЕ отдавались — S3 (про наборы), S4 (про КОД: fee.ts:88)
   → в закрывающий список, гейта в фазе 2 нет

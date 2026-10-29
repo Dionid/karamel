@@ -117,17 +117,15 @@ fi
 self="${self#"worktrees/$task/"}"
 self="${self%/}"
 
-manifest="$(repos_manifest "$workspace")"
-
 # base_of <repo-name> — the branch its MRs target. From the manifest, because it
-# differs per repo (`development` in one, `main` in the next); `main` for a
-# checkout the manifest does not describe.
+# differs per repo (`development` in one, `main` in the next), or the personal
+# base <owner>-<base>; `main` for a checkout the manifest does not describe.
+# The shared resolver in lib.sh, so this never disagrees with run.sh. It fails
+# (unusable owner) only for a personalBase repo; callers assign its output
+# first so that failure stops them instead of becoming an empty `git log` range.
+# A task with no personalBase repo is not affected by the owner at all.
 base_of() {
-  if [[ -f "$manifest" ]]; then
-    jq -r --arg r "$1" '.repos[$r].branch // "main"' "$manifest" 2>/dev/null || printf 'main\n'
-  else
-    printf 'main\n'
-  fi
+  resolve_task_base "$workspace" "$1"
 }
 
 # set_range <dir> <base> — the git log argument list, in RANGE_ARGS, and whether
@@ -285,7 +283,12 @@ if [[ "$mode" == "update" ]]; then
       continue
     fi
 
-    set_range "$dir" "$(base_of "$(basename "$rel")")"
+    if ! base="$(base_of "$(basename "$rel")")"; then
+      printf 'FAILED=%s base\n' "$rel" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+    set_range "$dir" "$base"
 
     lookup_rc=0
     gl_mr_find "$dir" "$branch" --all || lookup_rc=$?
@@ -417,7 +420,8 @@ while read -r rel; do
   # Detached HEAD has no branch, so it has no PR to name.
   [[ -n "$branch" ]] || continue
 
-  set_range "$dir" "$(base_of "$(basename "$rel")")"
+  base="$(base_of "$(basename "$rel")")" || exit 1
+  set_range "$dir" "$base"
 
   IFS=$'\t' read -r mr_url mr_state < <(mr_of "$repos_json" "worktrees/$task/$rel")
 
@@ -462,7 +466,8 @@ fi
 # some other checkout's author.
 author=""
 if ((self_index >= 0)); then
-  set_range "$task_dir/$self" "$(base_of "$(basename "$self")")"
+  base="$(base_of "$(basename "$self")")" || exit 1
+  set_range "$task_dir/$self" "$base"
   author="$(author_line "$task_dir/$self")"
 fi
 
