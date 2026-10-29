@@ -209,6 +209,65 @@ class Builder:
         )
         return profile.encode()
 
+    def manifest_repos(self) -> dict[str, Any]:
+        """``repos`` of ``repos.json``; no manifest is an empty workspace, a broken one an error."""
+        manifest = self.root / "repos.json"
+        if not manifest.is_file():
+            return {}
+        try:
+            repos = json.loads(manifest.read_text()).get("repos", {})
+        except (ValueError, AttributeError) as error:
+            raise RuntimeError(f"repos.json is not a valid manifest: {error}") from error
+        if not isinstance(repos, dict):
+            raise RuntimeError("repos.json is not a valid manifest: `repos` must be an object")
+        return repos
+
+    def repo_checks(self) -> list[str]:
+        """Errors in the optional ``checks`` of ``repos.json`` entries.
+
+        ``checks`` lists the standard local verification commands of a repository —
+        lint, typecheck, unit tests, build — that an agent runs before reporting. It is
+        a list of nonempty strings. Integration and e2e run in CI only, so a command
+        that the ``block-local-integration-tests.py`` hook would refuse is an error
+        here too: the manifest must not advertise as standard what the agent may not
+        run. The hook is imported, not copied, so both share one detector; it is
+        loaded only when some repository declares commands, and a hook that cannot be
+        loaded is an error rather than a silent pass. ``check`` reports these as drift,
+        ``sync`` as warnings.
+        """
+        errors: list[str] = []
+        detect = None
+        for repo, entry in self.manifest_repos().items():
+            if not isinstance(entry, dict) or "checks" not in entry:
+                continue
+            declared = entry["checks"]
+            if not isinstance(declared, list):
+                errors.append(f"repos.json: {repo}.checks must be a list of command strings")
+                continue
+            for raw in declared:
+                if not isinstance(raw, str) or not raw.strip():
+                    errors.append(f"repos.json: {repo}.checks entry {raw!r} must be a nonempty command string")
+                    continue
+                if detect is None:
+                    try:
+                        detect = self.integration_detector()
+                    except Exception as error:  # a check fails loudly, unlike the hook itself
+                        errors.append(f"repos.json: {repo}.checks cannot be verified: the "
+                                      f"block-local-integration-tests.py hook did not load ({error})")
+                        return errors
+                hit = detect(raw)
+                if hit:
+                    errors.append(f"repos.json: {repo}.checks entry {raw!r} runs integration/e2e ({hit}); "
+                                  "those run in CI only — list lint, typecheck, unit and build commands")
+        return errors
+
+    def integration_detector(self) -> Any:
+        """``analyze_command`` of the integration hook, executed without writing bytecode."""
+        path = self.agents / "common" / "hooks" / "block-local-integration-tests.py"
+        namespace: dict[str, Any] = {"__name__": "block_local_integration_tests", "__file__": str(path)}
+        exec(compile(path.read_text(), str(path), "exec"), namespace)
+        return namespace["analyze_command"]
+
     def repo_skills(self) -> tuple[dict[str, Path], list[str], list[str]]:
         """Skills that live in product repositories: ``(name -> directory, warnings, errors)``.
 
@@ -229,15 +288,7 @@ class Builder:
         found: dict[str, Path] = {}
         warnings: list[str] = []
         errors: list[str] = []
-        manifest = self.root / "repos.json"
-        repos: Any = {}
-        if manifest.is_file():
-            try:
-                repos = json.loads(manifest.read_text()).get("repos", {})
-            except (ValueError, AttributeError) as error:
-                raise RuntimeError(f"repos.json is not a valid manifest: {error}") from error
-            if not isinstance(repos, dict):
-                raise RuntimeError("repos.json is not a valid manifest: `repos` must be an object")
+        repos = self.manifest_repos()
         taken = {path.name for path in (self.agents / "common" / "skills").iterdir() if path.is_dir()}
         for repo, entry in repos.items():
             declared = entry.get("skills", []) if isinstance(entry, dict) else []
@@ -431,6 +482,7 @@ class Builder:
         expected_links = self.links()
         expected_files = self.files()
         drift: list[str] = [f"skill-import:{error}" for error in self.repo_skills()[2]]
+        drift += [f"manifest:{error}" for error in self.repo_checks()]
 
         try:
             self.validate_layout(expected_files)
@@ -601,11 +653,13 @@ def main() -> int:
         try:
             builder.sync()
             _, warnings, errors = builder.repo_skills()
+            errors = [*errors, *builder.repo_checks()]
         except RuntimeError as error:
             print(f"runtime sync refused: {error}", file=sys.stderr)
             return 2
         # A skill that cannot be imported never stops sync: the workspace skill wins,
-        # a missing directory is a repository not cloned or not merged yet.
+        # a missing directory is a repository not cloned or not merged yet. A bad
+        # `checks` entry is advice for agents, not a runtime file: also a warning.
         for message in (*warnings, *errors):
             print(f"warning: {message}", file=sys.stderr)
         print("runtime trees synchronized")

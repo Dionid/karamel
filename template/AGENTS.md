@@ -177,6 +177,23 @@ docker compose -p <repo>-<task> up -d
 явного согласия. Обычный `docker compose down` без `-v` для своего проекта
 безопасен.
 
+## Integration-тесты только в CI
+
+Integration и e2e локально не запускаются — ни агентом, ни child: их пишут как
+обычно, а гоняет CI. Локально — только стандартные checks репозитория: поле
+`checks` в `repos.json`, без него lint, typecheck, unit и build из README и
+скриптов. Хук `block-local-integration-tests.py` отказывает по исполняемой
+команде (npm/yarn/pnpm `*integration*`/`*e2e*`, `pytest -m integration`,
+jest/vitest, `go test -tags integration`/`-run Integration`, `playwright test`,
+`cypress`, `nx run <proj>:e2e`, и внутри `docker`/`podman`/`kubectl exec`) и
+пропускает build, lint, typecheck, unit и сбор без запуска (`e2e:build`,
+`pytest --collect-only`). Gradle, Maven, Cargo, RSpec, dotnet и скрипты-обёртки
+он не видит — правило действует и на них. В отчёте — «integration не
+запускались локально», не «прошли». Выключатель
+`WORKSPACE_ALLOW_LOCAL_INTEGRATION=1` ставит только человек; если он поставил
+его и прямо попросил локальный прогон, агент запускает ровно его и сообщает,
+что прогон был локальным по просьбе человека.
+
 ## Креды
 
 Gitignore-нутый корневой `.env` предназначен для инструментов агента.

@@ -103,9 +103,9 @@ be attributed after a compaction.
 - Ф1 W2 ЗАКРЫТА — все находки фазы кода с исходом → фаза 2
 - Ф2 G2 builder — dispatched; Ф2 G3 builder — dispatched
 - Ф2 G3 builder — complete — 6 unit green; код не двигал
-- Ф2 G2 builder — complete — 14 unit / 5 integration green; **код правил**:
-  fee.ts:88 (integration поймал округление, ревью не увидело); e2e NOT RUN
-  (не просили)
+- Ф2 G2 builder — complete — 14 unit green; 5 integration написаны,
+  не запускались локально (CI); **код правил**: fee.ts:88 (unit поймал
+  округление, ревью не увидело); e2e не писали (не просили)
 - Ф2 W2 ревью тестов — 2 should-fix (findings-w2-tests.md); SPEC: unaffected
 - Ф2 W2 should-fix НЕ отдавались — S3 (про наборы), S4 (про КОД: fee.ts:88)
   → в закрывающий список, гейта в фазе 2 нет

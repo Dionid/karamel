@@ -28,7 +28,7 @@ Two conditions, both required of every wave:
   two groups of one repo still contend over integration into the one canonical
   worktree and over shared build/test infrastructure (package manifest, lockfile,
   generated output, a fixed-port compose stack) — in phase 2 they race each
-  other's integration tests too;
+  other's test runs too;
 - **the paths of a wave's groups do not overlap.** Resolve the globs rather than
   eyeballing them:
 
@@ -69,12 +69,13 @@ justify from the code is not one — leave the group where it is and say so.
 
 ## The one exception, and it comes from phase 2
 
-**Two groups whose integration tests would collide over shared infrastructure**
+**Two groups whose locally-run suites would collide over shared infrastructure**
 (one docker-compose stack with fixed container names or ports, say) **stay in
 different waves**, disjoint paths or not — their suites will serialise anyway in
 phase 2, so putting them in one wave buys nothing there and adds a collision risk
 in phase 1. If a promotion would create that pair, do not make it. No such shared
-resource in this workspace → this exception does not apply.
+resource in this workspace → this exception does not apply. Integration and e2e
+suites never create it: they run in CI only, not in phase 2.
 
 ## `## Порядок релиза` is not a dispatch input
 

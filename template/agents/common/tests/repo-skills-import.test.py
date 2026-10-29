@@ -209,6 +209,70 @@ def main() -> int:
         check(failed.returncode != 0 and "skill-import:" in failed.stdout + failed.stderr,
               "symlink escape: check fails", failed.stdout + failed.stderr)
 
+        # (i) `checks`: optional list of nonempty command strings, never integration/e2e
+        def with_checks(label: str, checks: object) -> Path:
+            root = seed(base / f"checks-{label}", [])
+            manifest = json.loads((root / "repos.json").read_text())
+            manifest["repos"]["app"]["checks"] = checks
+            (root / "repos.json").write_text(json.dumps(manifest))
+            return root
+
+        root = seed(base / "checks-absent", [])
+        build(root, "sync")
+        check(build(root, "check", "--in-place").returncode == 0, "checks absent: check is clean")
+        good = ["npm run lint", "npm run typecheck", "npm test", "npm run e2e:build",
+                "pytest --collect-only -m integration", "go test ./...", "cargo test"]
+        for label, checks in (("empty", []), ("standard", good)):
+            root = with_checks(label, checks)
+            synced = build(root, "sync")
+            check(synced.returncode == 0 and "checks" not in synced.stderr,
+                  f"checks {label}: sync is clean", synced.stdout + synced.stderr)
+            for mode in ("--in-place", "--scratch"):
+                ok = build(root, "check", mode)
+                check(ok.returncode == 0, f"checks {label}: check {mode} is clean", ok.stdout + ok.stderr)
+            check(not (root / "agents/common/hooks/__pycache__").exists(),
+                  f"checks {label}: loading the hook leaves no bytecode in the layer")
+        for label, checks, expected in (
+                ("string", "npm test", "app.checks must be a list of command strings"),
+                ("object", {"lint": "npm run lint"}, "app.checks must be a list of command strings"),
+                ("empty-entry", ["npm test", ""], "app.checks entry '' must be a nonempty command string"),
+                ("blank-entry", ["   "], "must be a nonempty command string"),
+                ("non-string", ["npm test", 3], "app.checks entry 3 must be a nonempty command string"),
+                ("null-entry", [None], "app.checks entry None must be a nonempty"),
+                ("e2e-script", ["npm run lint", "npm run test:e2e"], "'npm run test:e2e' runs integration/e2e"),
+                ("nx-e2e", ["nx run api:e2e"], "'nx run api:e2e' runs integration/e2e"),
+                ("go-integration", ["go test -run Integration ./..."], "runs integration/e2e"),
+                ("pytest-marker", ["pytest -m integration"], "runs integration/e2e"),
+                ("playwright", ["npx playwright test"], "runs integration/e2e"),
+                ("wrapped", ["cd api && npm run test:integration"], "runs integration/e2e")):
+            root = with_checks(label, checks)
+            for mode in ("--in-place", "--scratch"):
+                refused = build(root, "check", mode)
+                check(refused.returncode == 1 and "manifest:repos.json: app.checks" in refused.stderr
+                      and expected in refused.stderr and "Traceback" not in refused.stderr,
+                      f"checks {label}: check {mode} fails with a readable message",
+                      refused.stdout + refused.stderr)
+            synced = build(root, "sync")
+            check(synced.returncode == 0 and f"warning: repos.json: app.checks" in synced.stderr
+                  and expected in synced.stderr, f"checks {label}: sync warns and exits 0",
+                  synced.stdout + synced.stderr)
+        # the hook's switch is for a human-requested run, not for the manifest
+        root = with_checks("switch", ["npm run test:e2e"])
+        build(root, "sync")
+        switched = subprocess.run([sys.executable, str(root / "agents/build.py"), "check", "--in-place"],
+                                  cwd=root, capture_output=True, text=True,
+                                  env={**os.environ, "WORKSPACE_ALLOW_LOCAL_INTEGRATION": "1"})
+        check(switched.returncode == 1 and "runs integration/e2e" in switched.stderr,
+              "checks: WORKSPACE_ALLOW_LOCAL_INTEGRATION=1 does not admit e2e into checks",
+              switched.stdout + switched.stderr)
+        # a layer without the hook cannot verify declared commands: a loud error, not a pass
+        root = with_checks("no-hook", ["npm test"])
+        (root / "agents/common/hooks/block-local-integration-tests.py").unlink()
+        broken = build(root, "check", "--scratch")
+        check(broken.returncode == 1 and "app.checks cannot be verified" in broken.stderr
+              and "Traceback" not in broken.stderr, "checks: missing hook fails check loudly",
+              broken.stdout + broken.stderr)
+
         # a manifest whose `repos` is not an object is a readable error, not a traceback
         root = seed(base / "repos-list", [])
         (root / "repos.json").write_text('{"repos": []}\n')

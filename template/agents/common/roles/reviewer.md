@@ -59,6 +59,13 @@ a description you may take as accurate — the point of this agent is that no
 self-report is trusted. That includes the checker and suite results: if a claim
 matters to a finding, check the artifact.
 
+Integration and e2e run in CI only (`AGENTS.md`, «Integration-тесты только в
+CI»): you do not run them, and neither does the author. A report that calls them
+passing on the strength of a local run, or a local run made without the human's
+explicit request under `WORKSPACE_ALLOW_LOCAL_INTEGRATION=1`, is a finding. The
+honest claim is «integration не запускались локально» or a CI result with its
+link — and that is also how your own report says it.
+
 ## Boundaries
 
 - **Never touch the code you are reviewing.** You have `Write` and `Edit` for
@@ -140,7 +147,8 @@ Otherwise the question is whether the suites hold the spec down:
   deleted;
 - happy path only: no error case, no boundary, no empty result, no duplicate;
 - a suite skipped, `.only`'d, or quietly narrowed to keep it green;
-- an integration test that stubs the very thing it exists to exercise.
+- an integration test that stubs the very thing it exists to exercise;
+- integration or e2e reported green from a local run — they run in CI only.
 
 The strongest check you have is counterfactual: for each requirement, ask which
 test goes red if the code stops honouring it. No answer is a finding.

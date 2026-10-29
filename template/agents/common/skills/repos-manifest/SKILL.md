@@ -1,6 +1,6 @@
 ---
 name: repos-manifest
-description: Создавать, объяснять и изменять repos.json воркспейса. Использовать для схемы манифеста, добавления или удаления записей, настройки always, exclude, deps, hooks, skills, knowledgeRoot, specRoot и notionSnapshotRepo.
+description: Создавать, объяснять и изменять repos.json воркспейса. Использовать для схемы манифеста, добавления или удаления записей, настройки always, exclude, deps, hooks, skills, checks, knowledgeRoot, specRoot и notionSnapshotRepo.
 ---
 
 # Манифест репозиториев
@@ -34,7 +34,9 @@ description: Создавать, объяснять и изменять repos.js
 4. При удалении записи проверьте ссылки из `always`, `notionSnapshotRepo` и
    `PACKAGES.md`. Удаление записи не удаляет checkout, worktrees или данные;
    их cleanup выполняется отдельной процедурой `wt`.
-5. Hooks — исполняемый Bash, а не описание: проверьте cwd, повторный запуск,
+5. `checks` задавайте, только если команды проверки repo неочевидны из README
+   и скриптов: lint, typecheck, unit, build — без integration/e2e, они только в
+   CI. Hooks — исполняемый Bash, а не описание: проверьте cwd, повторный запуск,
    отсутствие секретов в тексте/выводе и стоимость команды. Для установки в
    Node worktree применяйте `npm install`, сохраняя copy-on-write зависимости.
 6. Проверьте JSON и diff. Запустите из изменённого checkout `./ops check

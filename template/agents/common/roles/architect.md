@@ -119,8 +119,9 @@ collide in one checkout.
   and count a shared package manifest, lockfile, migrations directory,
   DI/module registry, exported `index`, or shared test-config file as an
   overlap;
-- **two groups whose integration tests would collide over one shared piece of
-  infrastructure go into different waves**, disjoint paths or not — where such a
+- **two groups whose locally-run suites would collide over one shared piece of
+  infrastructure go into different waves** (integration and e2e run in CI only,
+  so they never do), disjoint paths or not — where such a
   shared resource exists (a single docker-compose stack with fixed ports, say),
   their suites serialise in the test phase anyway, so putting them in one wave
   buys nothing there and adds a collision risk in the code phase. No such shared

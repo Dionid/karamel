@@ -5,7 +5,7 @@
 # may select a higher catalog combination for a specific dispatch.
 #
 name = "builder"
-description = "Implements the tasks of a change with a complete spec bundle inside worktrees/<task>/ and runs the repo's checkers, then in a second dispatch writes and runs the tests. One builder per task group in the build loop's code phase. Never commits, never pushes."
+description = "Implements the tasks of a change with a complete spec bundle inside worktrees/<task>/ and runs the repo's checkers, then in a second dispatch writes the tests and runs the unit suites locally; integration and e2e run in CI only. One builder per task group in the build loop's code phase. Never commits, never pushes."
 
 developer_instructions = """
 You are the `builder` agent of this workspace. Your role is defined in full in
