@@ -72,12 +72,12 @@ No repository is selected by default.
 
 ## Что здесь лежит
 
-- **`AGENTS.md`** — доменные правила агента: треки Q/P/E/F/H/I/C, права на чтение и PR
+- **`AGENTS.md`** — доменные правила агента: треки Q/P/E/A/F/H/I/C, права на чтение и PR
   по репозиториям, работа со спеками, доступы к внешним системам (GitHub, БД,
   Kubernetes, Notion и т.д.).
 - **`agents/`** — сам агентский слой. `agents/common/skills/` — скиллы команды
   (build-loop, spec-trace, commit-and-mr, db-query и другие), которые собираются
-  и в `.claude/`, и в `.agents/`; `agents/common/roles/` — роли трека C
+  и в `.claude/`, и в `.agents/`; `agents/common/roles/` — роли треков C и A
   (analyst, architect, builder, reviewer) для Claude Code и Codex;
   `agents/claude/` и `agents/codex/` — рантайм-специфичные настройки поверх
   core.

@@ -27,14 +27,14 @@ from pathlib import Path
 
 REMINDER = (
     "Напоминание: Track выбран? Работу исполняет child по skill "
-    "agent-directed-routing (Q/P — explorer, E — scout, F/H/I — worker, C — "
-    "spec-loop/build-loop), включая live-операции без diff. Root только классифицирует, "
+    "agent-directed-routing (Q/P — explorer, E — scout, A — architect, F/H/I — worker, "
+    "C — spec-loop/build-loop), включая live-операции без diff. Root только классифицирует, "
     "готовит dispatch-prompt и проверяет результат; исключение — Track Q/E с одним "
     "известным источником . Если child не стартует по "
     "bounded fallback — сообщите о сбое делегирования, а не доделывайте сами."
 )
 WRITE_REASON = (
-    "Root не пишет в {path}: правка воркспейса — работа worker, а "
+    "Root не пишет в {path}: правка воркспейса — работа worker (Track A — architect), а "
     ".claude/settings*.json (выключатель гарда) меняет человек. Отправьте child "
     "по agent-directed-routing; вне воркспейса (scratchpad, /tmp) писать можно."
 )

@@ -52,7 +52,7 @@ knowledge-repo в ней есть. Для knowledge-only задачи созда
 одну ветку задачи и связанные PR.
 
 При `knowledgeRoot: "."` категории лежат прямо в репозитории: `facts/`,
-`decisions/`, `meetings/`, `projects/`, `references/`, `changelog/`.
+`decisions/`, `meetings/`, `projects/`, `references/`, `changelog/`, `architecture/`.
 Например, заметка встречи записывается в
 `worktrees/<task>/<knowledge-repo>/meetings/YYYY-MM-DD-<slug>.md`.
 Не добавляйте к этому пути `knowledge/` и не создавайте его заново.
@@ -74,6 +74,7 @@ knowledge-repo в ней есть. Для knowledge-only задачи созда
 | Встреча | `post-meeting` или назначенный участник | есть transcript/заметки и отделены решения от action items | `meetings/` |
 | Долгий проект/инициатива | владелец проекта | материал переживает одну задачу или PR | `projects/` |
 | Внешний первоисточник/слепок | специализированный sync/snapshot skill | источник нужен офлайн и понятны происхождение и дата | `references/`; см. исключение для зеркал ниже |
+| Карта или документ об архитектуре (Track A) | `architect` через skill **`architecture-map`** | утверждения подкреплены `path:line`, командой или URL, непроверенное — в «Неподтверждённое» | `architecture/<name>/README.md` (+ необязательный html) |
 | Стратегия | владелец направления | зафиксированы цель, горизонт и допущения | `strategy/` |
 | Пользовательски заметное изменение командного агентского слоя | автор изменения | перед закрытием PR с новым/изменённым поведением `agents/` | `changelog/YYYY-MM-DD-<slug>.md`; если настроены хранилище и skill **`changelog`**, он определяет необходимость и ссылки; иначе запись не требуется |
 | Требования к поведению продукта | analyst/architect через специализированный spec workflow | поведение должно быть проверяемым и согласованным до кода | `<specRoot>/openspec/`; используйте skill **`spec`** |
@@ -95,8 +96,9 @@ knowledge-repo в ней есть. Для knowledge-only задачи созда
    время слепка и специализированный skill, которым оно обновляется.
 5. Для OpenSpec-артефактов не выбирайте путь по этой таблице вручную — skill
    `spec` вычисляет `<specRoot>/openspec` из манифеста.
-6. Analyst и architect могут писать только свои OpenSpec-артефакты. Обычные
-   knowledge-файлы и Git lifecycle остаются у оркестратора.
+6. Analyst и architect могут писать только свои OpenSpec-артефакты, а architect
+   на Track A — ещё `architecture/<name>/`. Остальные knowledge-файлы и Git
+   lifecycle остаются у оркестратора.
 
 ## Узкое исключение: автоматизированные зеркала
 

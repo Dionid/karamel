@@ -34,7 +34,10 @@ The code review checks implementation against the change's spec before tests
 are written. Phase 2 then measures what execution catches beyond static review.
 
 Prerequisites: existing worktree and a completed spec bundle (`openspec validate`
-ok, cross-read and coverage closed) recorded in the ledger as `ПАКЕТ ГОТОВ → build loop открыт`; user approval of the spec is not required. Read requirements
+ok, cross-read and coverage closed) recorded in the ledger as `ПАКЕТ ГОТОВ → build loop открыт`; user approval of the spec is not required.
+**A ledger line `Ревью спеки до кода: да — Track A, без build-loop` means
+refuse** — no dispatch; implementing that spec is a new Track C task with its
+own `<task>` and ledger ([ledger.md](ledger.md)). Read requirements
 with `openspec-read` or `openspec show/status`; a `MODIFIED` delta amends the base
 spec. A missing or incomplete bundle means return to `spec-loop`, not dispatch
 builders; a significant spec change during the build goes back through

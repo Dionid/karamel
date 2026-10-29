@@ -2,7 +2,7 @@
 # и почему тело инструкции не дублируется — в комментарии `analyst.toml`.
 #
 name = "architect"
-description = "Technical architect for the study, feasibility and design/tasks-writing steps of a spec-first change — studies the repos, contracts and schema, reads the analyst's requirements for feasibility, and writes design.md and tasks.md with the parallelism and release-order tables the build loop runs on. Writes specs only, never code."
+description = "Technical architect for the study, feasibility and design/tasks-writing steps of a spec-first change — studies the repos, contracts and schema, reads the analyst's requirements for feasibility, and writes design.md and tasks.md with the parallelism and release-order tables the build loop runs on. On Track A also writes architecture maps and documents. Writes specs and architecture material only, never code."
 # model = "<id модели этой команды в Codex>"        # необязательно; по умолчанию — модель сессии
 # model_reasoning_effort = "high"                    # необязательно
 

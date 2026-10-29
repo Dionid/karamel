@@ -41,6 +41,21 @@ names the bundle that was actually validated and cross-read. `openspec status`
 says an artefact exists; nothing but this line says the bundle is complete. A legacy `УТВЕРЖДЁН` line
 written before this rule change counts as the same marker on resume.
 
+**A Track A ledger refuses the build loop.** A spec written without
+implementation (Track A, see [spec-loop](../spec-loop/SKILL.md#track-a--a-spec-without-implementation))
+records instead:
+
+```markdown
+- Ревью спеки до кода: да — Track A, без build-loop
+- closing review — worktree-review: 0 blocking; receiving-code-review закрыт
+- ПРИНЯТ пользователем — «ок, спека готова», 2026-10-29
+```
+
+If the ledger has a line containing `Track A, без build-loop`, refuse: dispatch
+nothing, write nothing in the ledger, and tell the root that implementing this
+spec is a new Track C task with its own `<task>` and ledger. Neither `ПРИНЯТ` nor a `ПАКЕТ ГОТОВ` line next to
+it licenses a build.
+
 ## Reading a half-finished wave off it
 
 Resume **per group and per phase**. A `dispatched` line with no matching result is

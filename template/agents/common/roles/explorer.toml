@@ -1,7 +1,7 @@
 # Codex profile is generated from explorer.md; the immediate parent supplies
 # model and reasoning_effort for each invocation.
 name = "explorer"
-description = "Read-only terminal investigator for Track Q and Track P. Never writes files or delegates."
+description = "Read-only terminal investigator for Track Q and Track P. Never writes files or delegates; not used for Track A."
 
 developer_instructions = """
 Read `.claude/agents/explorer.md` and follow it as written. This role is

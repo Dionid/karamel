@@ -189,6 +189,12 @@ def main() -> int:
     _, out3 = e.run("Bash", {"command": "ls"}, turn + [assistant("Read")] * 40)
     check("напоминание — один раз за ход, без лимита чтений",
           reminded(out1) and not out2 and not out3 and code == 0)
+    check("напоминание называет пишущий Track A и его роль architect",
+          "A — architect" in spec(out1).get("additionalContext", "")
+          and "исключение — Track Q/E" in spec(out1).get("additionalContext", ""))
+    _, out = e.run("Write", {"file_path": str(e.project / "kb" / "architecture" / "x" / "README.md")}, turn)
+    check("запись архитектурного документа root — deny с отсылкой к architect",
+          denied(out) and "Track A — architect" in spec(out).get("permissionDecisionReason", ""))
     _, out = e.run("Read", {"file_path": "/x"}, turn + [human("u2")])
     check("новый ход — новое напоминание", reminded(out))
     _, out = e.run("Read", {"file_path": "/x"}, after_agent + [human("u3")])

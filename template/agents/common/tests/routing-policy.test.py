@@ -53,8 +53,22 @@ assert rows["E"] == ("`scout`", "terminal")
 assert rows["F, H, I"][0] == "`worker`" and rows["F, H, I"][1].startswith("delegating only when depth")
 for role in ("analyst", "architect", "builder", "reviewer"):
     assert f"`{role}`" in rows["C"][0], role
+# Track A writes architecture material: architect (map/document) or analyst+architect via spec-loop, never worker/explorer
+assert "`architect`" in rows["A"][0] and "`analyst` + `architect` through `spec-loop`" in rows["A"][0]
+assert "`worker`" not in rows["A"][0] and "`explorer`" not in rows["A"][0]
+assert "disposable checkout" in rows["A"][1]
 says(AGENTS, "AGENTS.md", "`agent-directed-routing`", "Q/P — terminal `explorer`", "E — terminal `scout`", "F/H/I — `worker`",
+     "A — `architect` (спека — `analyst`+`architect` через `spec-loop`)",
      "`spec-loop`/`build-loop`", "root остаётся единственным пользовательским голосом")
+# Track A: classification, boundary with C, execution, and that the single-source exception does not cover it
+says(AGENTS, "AGENTS.md", "OpenSpec-спека без реализации → **Track A**", "спека без реализации — A, «реализуй спеку» — C",
+     "### Track A", "skill **`architecture-map`**", "`<knowledge-root>/architecture/<name>/`",
+     "непроверенное — в «Неподтверждённое»", "Спека на Track A всегда требует явного approval пользователя; `build-loop` не запускается",
+     "идёт до показа пакета пользователю", "любая правка после ПРИНЯТ — новый approval",
+     "код → F/C, infra → I, слой агента → H", "Track P/A/F/C/H/I — по-прежнему идёт child",
+     "Track A пишущий, исключение к нему не относится")
+says(ROUTING, "routing SKILL", "Track P/A/F/C/H/I — still goes to a child", "Track A writes, so the exception never covers it",
+     "a `worker` or `explorer` never executes it", "Track A writers are terminal too")
 # the single-source exception is pinned in both places, with its boundary and the injection rule
 says(AGENTS, "AGENTS.md", "ровно один вызов `Read` одного известного файла",
      "ровно один вызов `WebFetch` одного известного URL", "не `WebSearch`", "после `wt`-подтяжки",
@@ -139,6 +153,13 @@ says(norm(SKILLS / "build-loop/SKILL.md"), "build-loop SKILL", "a completed spec
      "Never skip ledger reads, phase/wave barriers", "Do not write tests in phase 1")
 says(norm(SKILLS / "spec-loop/prompts.md"), "spec-loop prompts",
      "build-loop starts only after the complete bundle is recorded in the ledger")
+# Track A spec: approval mandatory, review before the user sees it, build-loop refuses on the ledger line
+TRACK_A_LINE = "Ревью спеки до кода: да — Track A, без build-loop"
+says(norm(SKILLS / "spec-loop/SKILL.md"), "spec-loop SKILL", "Explicit user approval is mandatory",
+     "*before* the bundle is shown to the user", TRACK_A_LINE, "`build-loop` is never started",
+     "Any edit after ПРИНЯТ — even a wording fix — goes back to the user for a new approval")
+says(norm(SKILLS / "build-loop/ledger.md"), "build-loop ledger", TRACK_A_LINE, "If the ledger has a line containing `Track A, без build-loop`, refuse")
+says(norm(SKILLS / "build-loop/SKILL.md"), "build-loop SKILL", f"A ledger line `{TRACK_A_LINE}` means refuse")
 
 # --- write-capable roles refuse to write without a named checkout; read-only roles never write ---------------------
 
@@ -158,6 +179,14 @@ says(norm(roles / "scout.md"), "scout", "do not write, edit, create, delete, com
      "Nothing internal goes out")
 says(norm(roles / "reviewer.md"), "reviewer", "You never get a write scope on the code under review",
      "In the build loop you write nothing at all")
+# Track A per role: architect writes it, reviewer closes it, explorer and worker never execute it
+says(norm(roles / "architect.md"), "architect", "## Track A — an architecture map or document",
+     "`{CHECKOUT}/<knowledge-root>/architecture/<name>/`", "**`architecture-map`**")
+says(norm(roles / "reviewer.md"), "reviewer", "## The Track A pass", "EVIDENCE: ok", "EVIDENCE: gaps")
+says(norm(roles / "explorer.md"), "explorer", "Track A (architecture maps, documents, specs without implementation) is not yours")
+says(norm(roles / "worker.md"), "worker", "Track A (architecture maps, documents, specs without implementation) is not yours")
+for role in ("architect", "explorer", "reviewer", "worker"):
+    assert "Track A" in (roles / f"{role}.toml").read_text(), f"{role}.toml must mention Track A"
 
 # the builder never ticks tasks.md (it lives in the spec repo, outside its checkout): it reports, the orchestrator ticks
 builder = norm(roles / "builder.md")

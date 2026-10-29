@@ -9,7 +9,9 @@ Steps 1 through 4 of a spec-first change: everything before a line of code
 exists. [`build-loop`](../build-loop/SKILL.md) takes over at step 5, and it
 starts only from a completed spec bundle (validated, cross-read and coverage
 closed) recorded in the ledger. There is no separate user approval of the spec:
-scope was agreed with the user before it was written (step 2).
+scope was agreed with the user before it was written (step 2). The exception is
+a spec without implementation — [Track A](#track-a--a-spec-without-implementation):
+approval mandatory, no `build-loop`.
 
 Resolve the destination through the **`spec`** skill before dispatching either
 role. This skill assumes an OpenSpec-style spec repository: a `repos.json` entry that
@@ -181,6 +183,20 @@ invent a `## Порядок релиза` table that a multi-repo change never g
 the types". The spec repo is the only thing written, and it is committed with the
 code at the close — `commit-and-mr` picks it up at step 7, spec repo last.
 
+## Track A — a spec without implementation
+
+When the request is the spec alone (`AGENTS.md` → «Track A»), run steps 0–6
+as written, with three differences. **Explicit user approval is mandatory**:
+first the independent closing review of the bundle (`worktree-review`, then
+`receiving-code-review`) — *before* the bundle is shown to the user — then the
+bundle goes to the user, and only their explicit «ок» counts. Instead of
+`ПАКЕТ ГОТОВ → build loop открыт` the ledger's `## Спека` section gets the
+literal line `Ревью спеки до кода: да — Track A, без build-loop`, and after
+the approval `ПРИНЯТ пользователем — <quote, date>`. **`build-loop` is never
+started**: the close is a Draft MR of the spec repository through
+`commit-and-mr`. Any edit after ПРИНЯТ — even a wording fix — goes back to the
+user for a new approval. A request to implement the spec is Track C.
+
 ## Red flags
 
 - **an agent's question answered by you instead of by the user** — the one failure
@@ -201,3 +217,5 @@ code at the close — `commit-and-mr` picks it up at step 7, spec repo last.
 - a handoff to `build-loop` with no `ПАКЕТ ГОТОВ → build loop открыт` line in the ledger, or with
   an unclosed cross-read finding
 - `openspec archive` — the change has not been built yet
+- on Track A: the bundle shown to the user before the closing review, a
+  `build-loop` dispatch, or an edit after ПРИНЯТ without a new approval

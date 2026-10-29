@@ -1,7 +1,7 @@
 # Codex profile is generated from worker.md; the immediate parent supplies
 # model and reasoning_effort for each invocation.
 name = "worker"
-description = "Bounded implementation worker for Track F, H, or I. Never commits or pushes."
+description = "Bounded implementation worker for Track F, H, or I. Never commits or pushes; does not execute Track A."
 
 developer_instructions = """
 Read `.claude/agents/worker.md` and follow it as written. Write only in the

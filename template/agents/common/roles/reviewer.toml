@@ -2,7 +2,7 @@
 # и почему тело инструкции не дублируется — в комментарии `analyst.toml`.
 #
 name = "reviewer"
-description = "Code review of a worktrees/<task>/ checkout via the worktree-review skill — ranked defect-first findings, plus a ruling on whether the product spec has to change because of this code. Never fixes the code it finds fault with."
+description = "Code review of a worktrees/<task>/ checkout via the worktree-review skill — ranked defect-first findings, plus a ruling on whether the product spec has to change because of this code; also the closing review of a Track A architecture package. Never fixes the code it finds fault with."
 # model = "<id модели этой команды в Codex>"        # необязательно; по умолчанию — модель сессии
 # model_reasoning_effort = "high"                    # необязательно
 
