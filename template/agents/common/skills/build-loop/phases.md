@@ -18,7 +18,7 @@ green — **and writes no tests at all**, not a spec file, not a test-config fil
 not a placeholder. Say it in the prompt; the agent's own instructions say it too,
 and it is still the instruction most likely to be quietly disobeyed.
 
-Only start this phase after the final design/tasks approval is recorded in the
+Only start this phase after the `ПАКЕТ ГОТОВ → build loop открыт` line is recorded in the
 ledger. A capacity note about who *could* build something is not a queued
 builder — the card/process is created here, at the build-loop boundary.
 

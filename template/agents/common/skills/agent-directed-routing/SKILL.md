@@ -55,7 +55,7 @@ model-less and take `model` at spawn.
 | A, P | `explorer` | terminal |
 | E | `scout` | terminal |
 | B, H, I | `worker` | delegating only when depth and stage permit |
-| C | existing `analyst`, `architect`, `builder`, `reviewer` roles in approved order | as required by the current spec/build phase |
+| C | existing `analyst`, `architect`, `builder`, `reviewer` roles in spec-then-build order | as required by the current spec/build phase |
 
 Live operations without a repository diff (deploy, stand update, remote-host
 commands) follow the ordinary classification and are executed by the child with

@@ -1,6 +1,6 @@
 ---
 name: openspec-apply-change
-description: Реализовать задачи одобренного OpenSpec change. Использовать, когда пользователь хочет начать реализацию, продолжить её или пройтись по задачам.
+description: Реализовать задачи OpenSpec change с готовым пакетом спеки. Использовать, когда пользователь хочет начать реализацию, продолжить её или пройтись по задачам.
 allowed-tools: Bash(openspec:*)
 license: MIT
 compatibility: Requires openspec CLI.

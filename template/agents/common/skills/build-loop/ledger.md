@@ -4,8 +4,8 @@ Reference for §1 of [SKILL.md](SKILL.md). The rules that decide what you dispat
 live there; this is what the file looks like.
 
 **One ledger per task, shared with [`spec-loop`](../spec-loop/SKILL.md)** — it
-opens with the `## Спека` section written while the spec was being approved, and
-the waves are appended below it. Whichever loop gets there first creates the file.
+opens with the `## Спека` section written while the spec bundle was being completed,
+and the waves are appended below it. Whichever loop gets there first creates the file.
 
 ## Creating it
 
@@ -24,10 +24,11 @@ Spec: worktrees/<task>/<spec-repo>/<spec-root>/openspec/changes/<change-name>/
 - proposal.md — analyst
 - delta-спеки — analyst; feasibility от architect: 2 находки (backfill,
   публикуемый контракт одного из репозиториев) → requirement R3 переписан
-  аналитиком до показа пользователю
+  аналитиком до закрытия пакета
 - design.md + tasks.md — architect; coverage от analyst: чисто
-- bundle (proposal + delta-спеки + design.md + tasks.md) — **УТВЕРЖДЁН**
-  пользователем одним одобрением → build loop открыт
+- bundle (proposal + delta-спеки + design.md + tasks.md) — validate ok,
+  cross-read и coverage закрыты
+- ПАКЕТ ГОТОВ → build loop открыт
 
 ## План волн (из tasks.md `## Параллелизм`, после проверки — см. §2)
 - Волна 1: G1 (<repo с публикуемым пакетом>)
@@ -35,9 +36,10 @@ Spec: worktrees/<task>/<spec-repo>/<spec-root>/openspec/changes/<change-name>/
 - Волна 3: G4 (<repo>) — зависит от G2
 ```
 
-**Only the `УТВЕРЖДЁН` line licenses the build loop to start**, and only if it
-names the bundle the user actually saw. `openspec status` says an artefact
-exists; nothing but this line says they approved it.
+**Only the `ПАКЕТ ГОТОВ → build loop открыт` line licenses the build loop to start**, and only if it
+names the bundle that was actually validated and cross-read. `openspec status`
+says an artefact exists; nothing but this line says the bundle is complete. A legacy `УТВЕРЖДЁН` line
+written before this rule change counts as the same marker on resume.
 
 ## Reading a half-finished wave off it
 

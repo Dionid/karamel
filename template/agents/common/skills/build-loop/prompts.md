@@ -28,9 +28,9 @@ between them are in [SKILL.md](SKILL.md); these are only the prompts.
 need to know, they read from the worktree. That includes sideways: a builder
 working group `G3` is never told what `G2`'s builder did.
 
-Builder prompts are emitted only after the final design/tasks approval gate has
-recorded the current tasks.md. A capacity note about who *could* build something
-is not permission to create work before that gate.
+Builder prompts are emitted only after the `ПАКЕТ ГОТОВ → build loop открыт` line has been
+recorded in the ledger for the current tasks.md. A capacity note about who *could* build something
+is not permission to create work before that line.
 
 ## Scoping a prompt to a group
 
@@ -94,7 +94,7 @@ tier или effort.
 Фаза 1 — код. Реализуй change `{CHANGE}`; твой рабочий checkout репозитория группы — {CHECKOUT}
 (остальной worktree `worktrees/{TASK}/` читай, не пиши).
 Тесты в этой фазе НЕ пишутся.
-Эта карточка существует потому что final design/tasks approval уже записан;
+Эта карточка существует потому что пакет спеки уже отмечен в ledger строкой `ПАКЕТ ГОТОВ → build loop открыт`;
 не создавай дополнительных builder cards/processes и не расширяй wave scope.
 
 Repos in this task: {REPOS}
@@ -209,7 +209,7 @@ fork_turns: none
 Review wave {WAVE} of change `{CHANGE}` in `worktrees/{TASK}/` — branch commits
 and uncommitted work under the paths below. This is the CODE pass.
 
-Approved spec: worktrees/{TASK}/{SPEC_REPO}/{SPEC_ROOT}/openspec/changes/{CHANGE}/
+Spec: worktrees/{TASK}/{SPEC_REPO}/{SPEC_ROOT}/openspec/changes/{CHANGE}/
 
 Groups in this wave, built in parallel by agents that could not see each other:
 - {GROUP}: <repo> — {PATHS}
@@ -217,7 +217,7 @@ Groups in this wave, built in parallel by agents that could not see each other:
 
 There are no tests in this diff, and that is deliberate — they are written only
 after this review closes. So your whole budget goes on one question: does this
-code do what the approved change says it does? Read the delta specs first and the
+code do what the change says it does? Read the delta specs first and the
 code second, requirement by requirement — through `.claude/skills/openspec-read/`
 if this repository has that skill, so a MODIFIED block is read as an amendment to
 specs/<capability>/spec.md rather than as the whole requirement.
@@ -247,8 +247,8 @@ causes and what it costs to fix, not just the line it sits on.
 If a test file turns up in this diff, review it and say so — the phase split was
 not respected.
 
-The spec was written and approved before this code. Code that diverges from the
-approved change is a finding for the user to rule on — do not edit the spec into
+The spec was written before this code. Code that diverges from the
+change's spec is a finding for the user to rule on — do not edit the spec into
 agreement with it. Write nothing at all; end with the SPEC: line.
 ```
 
@@ -268,7 +268,7 @@ fork_turns: none
 ```text
 Review the TESTS of wave {WAVE} of change `{CHANGE}` in `worktrees/{TASK}/`.
 
-Approved spec: worktrees/{TASK}/{SPEC_REPO}/{SPEC_ROOT}/openspec/changes/{CHANGE}/
+Spec: worktrees/{TASK}/{SPEC_REPO}/{SPEC_ROOT}/openspec/changes/{CHANGE}/
 Groups and paths:
 - {GROUP}: <repo> — {PATHS}
 - {GROUP}: <repo> — {PATHS}
@@ -323,7 +323,7 @@ Review everything in `worktrees/{TASK}/` — every repo with a checkout there,
 branch commits and uncommitted work.
 
 Change under review: {CHANGE}
-Approved spec: worktrees/{TASK}/{SPEC_REPO}/{SPEC_ROOT}/openspec/changes/{CHANGE}/
+Spec: worktrees/{TASK}/{SPEC_REPO}/{SPEC_ROOT}/openspec/changes/{CHANGE}/
 
 This change was built wave by wave, and each wave was reviewed only within its
 own paths. Look hardest at what no single wave could see: a contract an early
@@ -346,8 +346,8 @@ Findings the user already ruled on at an earlier wave's gate are recorded in
 was declined there. If you think a declined finding is worse than the ruling
 assumed, say so once, naming the ledger line.
 
-The spec was written and approved before this code. Code that diverges from the
-approved change is a finding for the user to rule on — do not edit the spec into
+The spec was written before this code. Code that diverges from the
+change's spec is a finding for the user to rule on — do not edit the spec into
 agreement with it. Write nothing at all; end with the SPEC: line.
 ```
 
@@ -578,7 +578,7 @@ description of the current state.
 
 Это последний раунд. Дальше раунда нет: всё, что останется открытым, уходит к
 пользователю как BLOCKED, и волны за этой встают. Поэтому если находка не
-закрывается без изменения одобренного дизайна или спеки — НЕ продавливай её.
+закрывается без изменения дизайна или спеки — НЕ продавливай её.
 Назови структурное препятствие: какое требование или какая граница мешает, что
 пришлось бы поменять, и почему это решение не твоё. Такой ответ полезнее
 обходного пути, который прячет проблему, и именно он попадёт пользователю.
@@ -609,7 +609,7 @@ group's builder; only the findings the user picked.
 
 Раунд один: второй автоматической попытки по этому списку нет, всё
 незакрывшееся уходит обратно к пользователю. Поэтому находку, которую нельзя
-закрыть без изменения одобренного дизайна, назови структурным препятствием, а
+закрыть без изменения дизайна, назови структурным препятствием, а
 не продавливай.
 
 Re-run the affected checkers — and in the test phase the affected suites — and

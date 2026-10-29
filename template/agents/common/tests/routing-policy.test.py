@@ -134,10 +134,11 @@ assert "minimum tier/effort: strong/high for each role" in norm(SKILLS / "spec-l
 # a cheaper child never skips approval, phase, review or wave barrier
 says(ROUTING, "routing SKILL", "Do not send a writing child until required approval and workflow gates have passed",
      "Preserve independent reviewers, group boundaries, build phases, and wave barriers")
-says(norm(SKILLS / "build-loop/SKILL.md"), "build-loop SKILL", "explicit user approval", "waves run sequentially",
+says(norm(SKILLS / "build-loop/SKILL.md"), "build-loop SKILL", "a completed spec bundle",
+     "user approval of the spec is not required", "waves run sequentially",
      "Never skip ledger reads, phase/wave barriers", "Do not write tests in phase 1")
 says(norm(SKILLS / "spec-loop/prompts.md"), "spec-loop prompts",
-     "build-loop starts only after the final approval is recorded")
+     "build-loop starts only after the complete bundle is recorded in the ledger")
 
 # --- write-capable roles refuse to write without a named checkout; read-only roles never write ---------------------
 

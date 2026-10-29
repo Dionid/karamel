@@ -1,13 +1,14 @@
 ---
 name: build-loop
-description: Провести build loop для одобренного OpenSpec change — реализация одобренного change: волны билдеров, ревью, ограниченные раунды исправлений, гейт решения раз на волну и resume по .build-loop/progress.md. Использовать при реализации одобренного change или при возобновлении уже начатой работы.
+description: Провести build loop для OpenSpec change с готовым пакетом спеки — реализация change: волны билдеров, ревью, ограниченные раунды исправлений, гейт решения раз на волну и resume по .build-loop/progress.md. Использовать при реализации change с готовой спекой или при возобновлении уже начатой работы.
 ---
 
 # The build loop
 
 Picks up where [`spec-loop`](../spec-loop/SKILL.md) leaves off: it starts only
-from a change **the user approved** through that loop's steps 1-4, and it is
-what makes that approval resumable across compactions. You are the
+from a change whose spec bundle is complete (that loop's steps 1-4: validated,
+cross-read and coverage closed), and it is what makes that state resumable
+across compactions. You are the
 **orchestrator**: you dispatch agents, keep the ledger, and put in front of the
 user the few things only they can rule on. You do not implement, test or review
 the change yourself — doing it inline burns the context you need to keep
@@ -26,16 +27,18 @@ Two agent types, in [`../../roles/`](../../roles/), prompts in
   concurrently within each phase.
 - **`reviewer`** — **twice per wave**, once after each phase, across all of that
   wave's paths, with up to three fix rounds after each. On this loop it writes
-  nothing in the spec: the spec was approved first, so code diverging from it is a
+  nothing in the spec: the spec came first, so code diverging from it is a
   finding for the user to rule on, not a spec to rewrite.
 
-The code review checks implementation against the approved change before tests
+The code review checks implementation against the change's spec before tests
 are written. Phase 2 then measures what execution catches beyond static review.
 
-Prerequisites: existing worktree and explicit user approval of current
-design.md/tasks.md, recorded in the ledger. Read requirements with `openspec-read`
-or `openspec show/status`; a `MODIFIED` delta amends the base spec. Missing or
-stale approval means return to `spec-loop`, not dispatch builders.
+Prerequisites: existing worktree and a completed spec bundle (`openspec validate`
+ok, cross-read and coverage closed) recorded in the ledger as `ПАКЕТ ГОТОВ → build loop открыт`; user approval of the spec is not required. Read requirements
+with `openspec-read` or `openspec show/status`; a `MODIFIED` delta amends the base
+spec. A missing or incomplete bundle means return to `spec-loop`, not dispatch
+builders; a significant spec change during the build goes back through
+`spec-loop` (re-draft), with no re-approval gate.
 
 ## 1. The ledger — before dispatching anything
 
@@ -90,8 +93,8 @@ stop for the user first**, and do not fix anything yourself.
 `path:line` and its failure scenario — and so is everything under it, as a tail.
 Where it goes depends on the phase, and that is §4b.
 
-**One exception, and it is not negotiable: a finding that contradicts the approved
-spec stops the round.** No builder can settle it — put the finding and the spec
+**One exception, and it is not negotiable: a finding that contradicts the
+change's spec stops the round.** No builder can settle it — put the finding and the spec
 text in front of the user and ask which governs, while everything else dispatches.
 
 Rounds `R = 1, 2, 3`, **counted per phase per wave**, not per group — resume the
@@ -150,7 +153,7 @@ The user hears from you at these moments and no others:
 
 1. **the ruling gate** — once per wave, between the phases, per §4b. The one stop
    the loop makes by design: one per wave, three on a three-wave change;
-2. **a finding that contradicts the approved spec** — immediately, per §4, without
+2. **a finding that contradicts the spec** — immediately, per §4, without
    waiting for the gate;
 3. **a Blocking still open after phase 2's three rounds** — out of band, the wave
    is stopped, and every wave behind it with it;
