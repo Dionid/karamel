@@ -1,14 +1,15 @@
 ---
 name: agent-directed-routing
-description: Route work to child agents after classifying a Track, choose role/model/effort from the tracked catalog, apply bounded fallback and depth policy, give every write-capable child an isolated checkout with reserved scope, and return only verified root-authored results. Use for any user task that requires investigation, implementation, or review, including live operations (deploy, environment/stand update, commands on a remote host) and "do the same as last session" repeats.
+description: Route work to child agents after classifying a Track, choose role/model/effort from the tracked catalog, apply bounded fallback and depth policy, give every write-capable child an isolated checkout with reserved scope, and return only verified root-authored results. Use for any user task that requires investigation, implementation, or review, including live operations (deploy, environment/stand update, commands on a remote host) and "do the same as last session" repeats. Also use whenever the root acts as orchestrator ("оркестратор").
 ---
 
 # Agent-directed routing
 
-The root agent classifies the request with the workspace instructions, then
-dispatches the work and verifies the child's result before writing the final
-answer. This applies to every Track, including read-only A, P and E, with one
-narrow exception:
+The root agent (in conversation also "the orchestrator", «оркестратор» — the
+same role, not a separate profile in `roles/`) classifies the request with the
+workspace instructions, then dispatches the work and verifies the child's result
+before writing the final answer. This applies to every Track, including
+read-only A, P and E, with one narrow exception:
 on Track A or E, when the answer comes from ONE known source (exactly one `Read`
 tool call of one known file, or exactly one `WebFetch` call of one known URL — not
 a directory, not `cat`/`rg` through Bash, not `WebSearch`), the root may do that
@@ -176,6 +177,10 @@ python3 $W --repo-root worktrees/<task>/<repo> start --agent-path root/worker-1 
 python3 $W --repo-root worktrees/<task>/<repo> submit --agent-path root/worker-1   # patch + manifest
 python3 $W --repo-root worktrees/<task>/<repo> integrate --agent-path root/worker-1 # verify + apply
 ```
+
+A task spanning several repositories runs `spawn` … `integrate` once per
+repository, each with its own `--repo-root worktrees/<task>/<repo>` and its own
+`agentPath` (one ledger per task is keyed by it).
 
 `cancel --agent-path A` drops a live writer (launch failure, cancellation);
 `recover [--agent-path A]` salvages writers whose lease expired (or that you

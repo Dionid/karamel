@@ -227,6 +227,14 @@ make adopt BRANCH=feature/withdraw-flow/03-wallets REPO=api
 origin, если каталог удалили, а локальная ветка осталась. `--dry-run` печатает
 все шаги и ничего не трогает.
 
+**Одна задача — несколько веток одного репозитория.** Каждая ветка
+`<branchPrefix><task>/<sub>` получает свой worktree
+`worktrees/<task>/<sub>/<repo>` и свой MR, а `coord claim`/`finish` идут по
+внешнему `<task>`. Такую ветку ставит `adopt.sh`. Голой ветки
+`<branchPrefix><task>` рядом быть не должно: git не держит `x` и `x/<sub>`
+одновременно (см. второй пункт выше). Как адресовать и удалять такие
+чекауты — в [Удалении](#удаление).
+
 ### Удаление
 
 `wt rm` сначала спрашивает coordination registry и отказывается удалять задачу
@@ -277,7 +285,7 @@ wt rm drop-promo --repo web --delete-branch       # только один, ка�
 
 `--repo` разрешается по чекаутам, которые у задачи реально есть, а не по
 `worktrees/<task>/<repo>`, поэтому одинаково работает и на вложенной задаче —
-раскладке, которую создаёт `adopt.sh` для ветки `feature/<task>/<sub>`:
+раскладке, которую создаёт `adopt.sh` для ветки `<branchPrefix><task>/<sub>`:
 
 ```bash
 wt rm withdraw-flow --repo api            # найдёт 03-wallets/api
