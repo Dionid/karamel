@@ -30,6 +30,8 @@ worktree. No match means this loop has nowhere to write — stop and report it. 
 broken manifest: **the store follows the subject of the change**, so require exactly one *for the
 subject*; a subject spanning stores means stop, show the candidates, ask the user. Never write into both.
 
+If the workspace has the **`work-items`** skill, the change must record its task per that skill (`task: <task>` in `.openspec.yaml`, a `Задача:` link under the proposal H1).
+
 You are the **orchestrator**, and here that means something specific: **you are
 the only participant with a voice.** The two agents cannot talk to the user, so
 every question they raise is asked by you, and every answer reaches them only

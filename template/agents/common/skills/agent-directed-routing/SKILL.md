@@ -240,6 +240,26 @@ removal is retried by `recover`.
 Verify the child's claims before using them in the root's answer. Ledger and checkouts do not
 replace worktree, approval, review, or irreversible-action rules: integrate nothing before its gate.
 
+## One-shot CLI callers
+
+If the root is started by a one-shot CLI caller — for example a messenger bridge
+that sends one message, captures the first turn's response and exits — only that
+first turn is delivered. A turn ended with an acknowledgment while children keep
+running (a runtime yield/hand-back call such as `sessions_yield`) hands the caller
+that acknowledgment as the final answer; anything written after the children
+finish reaches no one. When the session key or launch command shows such a
+caller, the root **never yields before the final answer** and keeps the turn open
+until integration is done, by either:
+
+1. **a blocking child call** — the runtime's subagent tool in foreground mode
+   (for example `Agent` with `run_in_background: false`); or
+2. **an inline wait loop** — spawn without a completion target, then poll the
+   child in the same turn with a bounded timeout (for example
+   `subagents(action="wait", …)`) until it completes.
+
+The symptom of a violation: the user sees only an intermediate "working on it"
+message and no follow-up.
+
 ## User-facing output
 
 Only the root writes user-facing prose and the final response. Do not paste raw
