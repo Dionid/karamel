@@ -116,7 +116,7 @@ afterthought. Compare what the diff now makes the system *do* against
   capability it belongs under, and what the requirement would have to say.
 
 This skill only *reports* the ruling. Writing it is a caller's decision: on
-Track B the `reviewer` agent may create or update the spec (`AGENTS.md` →
+Track F the `reviewer` agent may create or update the spec (`AGENTS.md` →
 [the closing review](../../../../AGENTS.md)); a human running this skill decides for
 themselves. On Track C the spec was written before the code, so drift is a
 finding for the user to rule on and nothing gets rewritten to match the code.

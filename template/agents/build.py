@@ -195,7 +195,7 @@ class Builder:
         sandbox = '\nsandbox_mode = "read-only"' if source.stem in {"explorer", "scout"} else ""
         collaboration = (
             # both generations of the collaboration tools (spawn_agent & co.) are separate flags; a terminal
-            # profile that leaves either on could still spawn at depth 4 or in Track A/P/E
+            # profile that leaves either on could still spawn at depth 4 or in Track Q/P/E
             '\n\n[features]\nmulti_agent = false\nmulti_agent_v2 = false'
             if capability == "terminal"
             else ""

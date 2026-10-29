@@ -27,9 +27,9 @@ from pathlib import Path
 
 REMINDER = (
     "Напоминание: Track выбран? Работу исполняет child по skill "
-    "agent-directed-routing (A/P — explorer, E — scout, B/H/I — worker, C — "
+    "agent-directed-routing (Q/P — explorer, E — scout, F/H/I — worker, C — "
     "spec-loop/build-loop), включая live-операции без diff. Root только классифицирует, "
-    "готовит dispatch-prompt и проверяет результат; исключение — Track A/E с одним "
+    "готовит dispatch-prompt и проверяет результат; исключение — Track Q/E с одним "
     "известным источником . Если child не стартует по "
     "bounded fallback — сообщите о сбое делегирования, а не доделывайте сами."
 )
@@ -41,7 +41,7 @@ WRITE_REASON = (
 LIVE_REASON = (
     "Root не исполняет `{cmd}` сам: live-операции, мутирующий git, пакетные "
     "менеджеры и сборка — работа child по agent-directed-routing, и вызов Agent "
-    "этого не меняет. Отправьте worker (B/H/I) или explorer (A/P)."
+    "этого не меняет. Отправьте worker (F/H/I) или explorer (Q/P)."
 )
 UNKNOWN_REASON = (
     "В этом ходе root ещё не вызывал Agent, а `{cmd}` — не оркестрация и не "

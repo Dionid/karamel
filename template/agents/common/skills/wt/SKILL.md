@@ -202,7 +202,7 @@ Exits non-zero on a real problem, warns on a note. What it reports:
 
 | Reported | Meaning | Fix |
 | --- | --- | --- |
-| behind `origin/<base>` | `wt new` will refuse for that repo, and a Track A answer off it is stale | `.claude/skills/wt/wt pull --repo <repo>` |
+| behind `origin/<base>` | `wt new` will refuse for that repo, and a Track Q answer off it is stale | `.claude/skills/wt/wt pull --repo <repo>` |
 | in `repos.json`, not on disk | never cloned | `.claude/skills/wt/wt clone <name>` — the `clone` skill |
 | broken symlink in a worktree | its `.env`/`node_modules` target is gone | relink, or reinstall in `packages/<repo>` |
 | no `node_modules` in `packages/<repo>` | nothing to clone — the next `wt new` installs there once, then clones | nothing, or `.claude/skills/wt/wt seed --repo <repo>` to pay it now |

@@ -98,7 +98,7 @@ class World:
 
     def spawn(self, agent: str, *scopes: str, parent: str = "root", depth: int = 1, tree: Path | None = None,
               parent_scopes: tuple[str, ...] = ("src", "docs"), lease: int | None = None) -> subprocess.CompletedProcess:
-        args = ["spawn", "--agent-path", agent, "--parent-path", parent, "--depth", str(depth), "--track", "B"]
+        args = ["spawn", "--agent-path", agent, "--parent-path", parent, "--depth", str(depth), "--track", "F"]
         for scope in scopes:
             args += ["--scope", scope]
         if parent == "root":
@@ -193,7 +193,7 @@ def test_reservation_is_atomic_under_races() -> None:
     try:
         procs = [subprocess.Popen(
             [sys.executable, str(WRITER), "--repo-root", str(world.repo()), "spawn", "--agent-path", f"root/r{i}",
-             "--parent-path", "root", "--depth", "1", "--track", "B", "--scope", "src/a", "--parent-scope", "src"],
+             "--parent-path", "root", "--depth", "1", "--track", "F", "--scope", "src/a", "--parent-scope", "src"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=ENV) for i in range(6)]
         codes = sorted(p.wait() for p in procs)
         assert codes == [0, 2, 2, 2, 2, 2], f"exactly one racer may win the scope: {codes}"

@@ -1175,7 +1175,7 @@ cmd_repos() {
 # Exits non-zero when it finds a real problem; notes are warnings and don't.
 # `wt pull` — fast-forward the main checkout(s) to origin/<base>.
 #
-# Track A answers questions from packages/<repo>, and an answer read off a tree
+# Track Q answers questions from packages/<repo>, and an answer read off a tree
 # that is fifty commits behind is wrong in the one way nobody catches: it looks
 # right. So the pull is a command of its own rather than a sentence in the docs.
 #
