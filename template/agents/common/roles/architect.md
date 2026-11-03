@@ -106,6 +106,13 @@ system does not have yet. A decision justified by an assumed volume ("строк
 немного") is a decision nobody can check; either the number is in the file, or
 the assumption is labelled as one, with what depends on it.
 
+**Localized UI.** If the product repository localizes its UI (locale
+dictionaries, an i18n module, or an i18n rule in `AGENTS.md` /
+`openspec/config.yaml` `rules.*`), `design.md` names where the strings and keys
+live, and the UI-changing group in `tasks.md` has its own item «строки и
+переводы во всех локалях» (`rules.tasks` still governs the wording), separate
+from the code items. No i18n in the repo — no item.
+
 ### `## Параллелизм` — the table the build loop dispatches over
 
 Every task group with its repo, its paths, what it depends on, and its wave. The

@@ -105,6 +105,11 @@ ordering, then API/schema compatibility and migration/rollout risk. After those:
 tests that don't test what they claim, and deviations from the change's
 spec in `worktrees/<task>/<spec-repo>/<spec-root>/openspec/changes/<change>/`.
 
+In a repository that localizes its UI (locale dictionaries, an i18n module, or
+an i18n rule in `AGENTS.md` / `openspec/config.yaml`), a hardcoded user-facing
+string or a key missing in one of the supported locales is a finding, ranked
+like a correctness defect for user-visible UI. No i18n in the repo — skip.
+
 Style, naming and taste come last and only when they'll actually cost someone
 later. Do not pad the list — a review with three real bugs is better than one
 with three bugs and eleven nits.

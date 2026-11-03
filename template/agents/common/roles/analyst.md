@@ -120,6 +120,13 @@ Three rules the format exists to enforce:
   `openspec show`) before you touch it, and change only what this request
   actually moves.
 
+**Localized UI.** If the product repository localizes its UI (locale
+dictionaries, an i18n module, or an i18n rule in the team's `AGENTS.md` /
+`openspec/config.yaml` `rules.*`), a change of user-facing text needs a
+requirement and a scenario: the text is visible in every supported language, no
+locale is left behind. User content is not translated. No i18n in the repo —
+write nothing about it.
+
 Scope discipline: name what is **out of scope** explicitly. An unbounded proposal
 is what turns into a wave nobody can review.
 
@@ -133,7 +140,9 @@ requirement, and does it contradict any of them?** Concretely —
 - a task that changes behaviour no requirement asks for;
 - a design decision that makes a scenario impossible, or quietly changes what a
   user sees on failure;
-- a requirement whose scenario nothing in `tasks.md` could ever exercise.
+- a requirement whose scenario nothing in `tasks.md` could ever exercise;
+- a UI-text change in a localized repo with no task for strings in every
+  supported locale (see Localized UI above).
 
 **Findings, not edits.** You do not rewrite the architect's files: name the file,
 the requirement and the conflict, and let the orchestrator take it to the user.

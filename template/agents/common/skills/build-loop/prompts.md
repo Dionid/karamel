@@ -110,7 +110,8 @@ steps, in order:
 1. implement the tasks;
 2. run each touched repo's lint, typecheck/compile and build (read that repo's
    own package.json/Makefile/README for the real command names), and fix what
-   they report.
+   they report. If the repo localizes its UI, also run its EXISTING i18n
+   checks (typecheck, key-parity tests); new i18n tests are phase 2.
 
 НИ ОДНОГО ТЕСТА В ЭТОЙ ФАЗЕ: ни spec-файла, ни тестового конфига, ни CI-джобы,
 ни placeholder'а с describe.skip. Следом идёт ревью кода, и оно должно читать
