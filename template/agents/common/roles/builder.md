@@ -55,6 +55,16 @@ Before writing anything:
    conventions you are matching, and knowing where they will go keeps you from
    writing code that cannot be tested without being rewritten first.
 
+**Localized UI.** If the repository localizes its UI (locale dictionaries, an
+i18n module, or an i18n rule in `AGENTS.md` / `openspec/config.yaml`), every new
+or changed user-facing string (text, labels, `title`/`aria-label`/`placeholder`/
+`alt`, toasts, errors shown to users, plurals, date and number formatting) goes
+through that mechanism — no hardcoded strings — and its key is added in EVERY
+supported locale in the same change. User content is not translated. In phase 1
+run the repo's EXISTING i18n checks (typecheck, key-parity tests already in
+the repo) with the checkers; do not write them. New i18n tests belong to
+phase 2 like other tests. No i18n in the repo — nothing changes.
+
 ## Phase 1 — the code
 
 Your first dispatch. **Implement → checkers → report.**

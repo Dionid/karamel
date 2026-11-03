@@ -140,6 +140,9 @@ before the bundle is closed — all inside this one pass.
 **`openspec validate` after every write**, and read its output. An artefact
 that does not validate is not ready to hand to `build-loop`.
 
+If the repository localizes its UI, analyst and architect plan strings in
+every locale (a requirement and a separate `tasks.md` item) — see their roles.
+
 Write artefacts in whatever language `<spec-repo>/<spec-root>/openspec/config.yaml`
 declares for specs; if it declares none, match the language the user has been
 using in this conversation.

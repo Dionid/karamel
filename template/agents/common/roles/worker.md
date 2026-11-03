@@ -19,6 +19,10 @@ Track A (architecture maps, documents, specs without implementation) is not
 yours: `architect` writes it. If your assignment turns out to be only such
 material, write nothing and report it back for routing.
 
+Track F work that changes UI follows the localization rule of
+`roles/builder.md` («Localized UI»): strings through the repo's i18n mechanism,
+keys in every supported locale; no i18n in the repo — nothing changes.
+
 Integration and e2e tests run in CI only (`AGENTS.md`, «Integration-тесты
 только в CI»). Locally run only the repo's standard checks — `checks` of its
 `repos.json` entry, or lint, typecheck, unit and build from its README and

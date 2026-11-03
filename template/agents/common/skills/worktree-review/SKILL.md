@@ -102,6 +102,10 @@ Priority order while reading:
 4. Missing tests for new logic
 5. Conventions / dead code only when they obscure real risk
 
+In a repository that localizes its UI, a hardcoded user-facing string or a
+key missing in a supported locale ranks like item 1 for user-visible UI.
+Repositories without i18n: skip.
+
 Honor each repo's `CLAUDE.md` / lint rules when present under the worktree.
 When the repo documents no standard of its own for a §5 judgement call,
 [`references/code-smells.md`](references/code-smells.md) is an optional
