@@ -5,7 +5,7 @@
 #
 # Upstream задаётся в workspace.json: поле `upstream` (URL) и необязательное
 # `upstreamRef` (ветка, по умолчанию main). В upstream должен лежать
-# skills/new-workspace/new-workspace.sh (как в karamel): обновление делает он,
+# skills/new-workspace/new-workspace.sh (как в pechka): обновление делает он,
 # этот скрипт только доставляет свежую копию upstream в .agent-tools/upstream.
 # Транспорт — общая библиотека commit-and-mr (HTTPS + GITHUB_TOKEN); file://
 # и локальные пути работают без кредов.

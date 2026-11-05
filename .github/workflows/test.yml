@@ -28,7 +28,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install pinned Markdown linter
         run: npm i -g markdownlint-cli2@0.23.2
-      - name: Shellcheck karamel scripts
+      - name: Shellcheck pechka scripts
         run: shellcheck -S warning skills/new-workspace/new-workspace.sh tests/new-workspace.test.sh
       - name: Markdown
         run: markdownlint-cli2

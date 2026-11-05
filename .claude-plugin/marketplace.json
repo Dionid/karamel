@@ -1,11 +1,11 @@
 {
-  "name": "karamel",
+  "name": "pechka",
   "owner": {
     "name": "Dionid"
   },
   "plugins": [
     {
-      "name": "karamel",
+      "name": "pechka",
       "source": "./",
       "description": "Создаёт и обновляет агентские воркспейсы по образцу bulka."
     }

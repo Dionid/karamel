@@ -1,21 +1,25 @@
 ---
 name: new-workspace
-description: Создать новый агентский воркспейс по образцу bulka (правила AGENTS.md, скиллы, роли, хуки, ops, worktree-раскладка) или обновить агентский слой уже созданного. Использовать, когда просят «создай воркспейс», «разверни воркспейс как bulka», «новый harness для команды», «обнови агентский слой из karamel».
+description: Создать новый агентский воркспейс по образцу bulka (правила AGENTS.md, скиллы, роли, хуки, ops, worktree-раскладка) или обновить агентский слой уже созданного. Использовать, когда просят «создай воркспейс», «разверни воркспейс как bulka», «новый harness для команды», «обнови агентский слой из pechka».
 ---
 
 # Новый воркспейс
 
-Скрипт рядом со скиллом копирует `template/` из корня karamel, генерирует
+Скрипт рядом со скиллом копирует `template/` из корня pechka, генерирует
 командные файлы и собирает рантайм:
 
 ```bash
-<karamel>/skills/new-workspace/new-workspace.sh create <dir> --team <name> \
+<pechka>/skills/new-workspace/new-workspace.sh create <dir> --team <name> \
   [--knowledge <name>=<url>[@<branch>]] [--repo <name>=<url>[@<branch>]]... \
   [--agent <name>] [--branch-prefix codex/] [--no-setup] [--no-clone] [--no-git]
 ```
 
-`<karamel>` — каталог этого репозитория или установленного плагина: путь к
+`<pechka>` — каталог этого репозитория или установленного плагина: путь к
 скрипту — `skills/new-workspace/new-workspace.sh` относительно него.
+
+`PECHKA_TEMPLATE` выбирает другой каталог шаблона. Прежняя переменная
+`KARAMEL_TEMPLATE` поддерживается для совместимости; непустая `PECHKA_TEMPLATE`
+имеет приоритет. По умолчанию используется `template/` рядом с репозиторием.
 
 ## Перед запуском спросите у пользователя
 
@@ -50,7 +54,7 @@ description: Создать новый агентский воркспейс п�
 ## Обновление созданного воркспейса
 
 ```bash
-<karamel>/skills/new-workspace/new-workspace.sh upgrade <dir> [--dry-run]
+<pechka>/skills/new-workspace/new-workspace.sh upgrade <dir> [--dry-run]
 ```
 
 Перезаписывает общий слой из шаблона и удаляет из `agents/` и `docs/` файлы,
