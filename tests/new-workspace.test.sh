@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-KARAMEL="$(cd "$(dirname "$0")/.." && pwd)"
-NW="$KARAMEL/skills/new-workspace/new-workspace.sh"
+PECHKA="$(cd "$(dirname "$0")/.." && pwd)"
+NW="$PECHKA/skills/new-workspace/new-workspace.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
@@ -109,7 +109,7 @@ out="$("$NW" upgrade "$WS")"
 check_differs "upgrade" "$out"
 ok "upgrade печатает локальные отличия общего слоя (dry run и запись), без командных и нетронутых файлов"
 [ ! -e "$WS/agents/common/skills/gone" ] || fail "upgrade не удалил скилл, которого нет в шаблоне"
-cmp -s "$KARAMEL/template/GIT.md" "$WS/GIT.md" || fail "upgrade не вернул общий GIT.md"
+cmp -s "$PECHKA/template/GIT.md" "$WS/GIT.md" || fail "upgrade не вернул общий GIT.md"
 grep -q '# team rule' "$WS/AGENTS.md" || fail "upgrade перезаписал командный AGENTS.md"
 ok "upgrade обновляет общий слой и не трогает командные файлы"
 
@@ -117,10 +117,10 @@ echo x >> "$WS/GIT.md"
 "$NW" upgrade "$WS" > /dev/null 2>&1 && fail "upgrade при грязном дереве"
 ok "upgrade отказывается работать при незакоммиченных правках"
 
-# ./ops upgrade: upstream — локальный git-репозиторий с копией karamel.
+# ./ops upgrade: upstream — локальный git-репозиторий с копией pechka.
 UP="$TMP/upstream"
 mkdir -p "$UP"
-cp -a "$KARAMEL/skills" "$KARAMEL/template" "$UP/"
+cp -a "$PECHKA/skills" "$PECHKA/template" "$UP/"
 git -C "$WS" checkout -q GIT.md
 git -C "$UP" init -q -b main && git -C "$UP" add -A && git -C "$UP" commit -qm upstream
 python3 - "$WS" "$UP" <<'PY'

@@ -1,4 +1,4 @@
-// Охват markdownlint в karamel. template/ линтится уже внутри созданного
+// Охват markdownlint в pechka. template/ линтится уже внутри созданного
 // воркспейса (tests/new-workspace.test.sh), со своими настройками.
 {
   "globs": ["*.md", "skills/**/*.md"],

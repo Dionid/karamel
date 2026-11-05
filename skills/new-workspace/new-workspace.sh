@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # new-workspace.sh — создать агентский воркспейс из template/ или обновить
-# агентский слой уже созданного. Шаблон лежит в корне karamel: ../../template.
+# агентский слой уже созданного. Шаблон лежит в корне pechka: ../../template.
 #
 #   new-workspace.sh create <dir> --team <name> [options]
 #   new-workspace.sh upgrade <dir> [--dry-run]
@@ -13,9 +13,9 @@ set -euo pipefail
 
 SELF="$(basename "$0")"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-KARAMEL="$(cd "$HERE/../.." && pwd)"
-TEMPLATE="${KARAMEL_TEMPLATE:-$KARAMEL/template}"
-DEFAULT_UPSTREAM="https://github.com/Dionid/karamel"
+PECHKA="$(cd "$HERE/../.." && pwd)"
+TEMPLATE="${PECHKA_TEMPLATE:-${KARAMEL_TEMPLATE:-$PECHKA/template}}"
+DEFAULT_UPSTREAM="https://github.com/Dionid/pechka"
 
 TEAM_FILES=(repos.json workspace.json PACKAGES.md README.md notion.json CODEOWNERS IDENTITY.md SOUL.md AGENTS.md .env.example)
 # Командные файлы, которые create всегда переписывает: их расхождение с шаблоном
@@ -37,7 +37,7 @@ create options:
   --agent <name>            имя агента (по умолчанию "Engineering agent")
   --branch-prefix <prefix>  префикс веток задач (по умолчанию "codex/")
   --upstream <url>          откуда ./ops upgrade берёт общий слой (по умолчанию
-                            origin этого karamel или $DEFAULT_UPSTREAM)
+                            origin этого pechka или $DEFAULT_UPSTREAM)
   --repo <name>=<url>[@<branch>]
                             продуктовый репозиторий; можно повторять
   --knowledge <name>=<url>[@<branch>]
@@ -96,7 +96,7 @@ cmd_create() {
   fi
 
   if [ -z "$upstream" ]; then
-    upstream="$(git -C "$KARAMEL" config --get remote.origin.url 2>/dev/null || true)"
+    upstream="$(git -C "$PECHKA" config --get remote.origin.url 2>/dev/null || true)"
     upstream="${upstream:-$DEFAULT_UPSTREAM}"
   fi
 
@@ -167,7 +167,7 @@ PY
     say "git init"
     git -C "$dir" init -q -b main
     git -C "$dir" add -A
-    if git -C "$dir" commit -q -m "Initial workspace from karamel" 2>/dev/null; then
+    if git -C "$dir" commit -q -m "Initial workspace from pechka" 2>/dev/null; then
       say "первый коммит создан"
     else
       say "git identity не настроен: файлы добавлены в индекс, коммит сделайте сами"

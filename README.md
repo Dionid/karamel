@@ -1,4 +1,4 @@
-# karamel
+# pechka
 
 Генератор агентских воркспейсов по образцу
 [bulka](https://github.com/Dionid/bulka): правила `AGENTS.md`, скиллы, роли,
@@ -18,8 +18,8 @@
 Как плагин Claude Code:
 
 ```text
-/plugin marketplace add Dionid/karamel
-/plugin install karamel@karamel
+/plugin marketplace add Dionid/pechka
+/plugin install pechka@pechka
 ```
 
 После этого в любой сессии достаточно попросить «создай воркспейс как bulka».
@@ -27,8 +27,8 @@
 Без плагина — клоном:
 
 ```bash
-git clone https://github.com/Dionid/karamel ~/karamel
-~/karamel/skills/new-workspace/new-workspace.sh --help
+git clone https://github.com/Dionid/pechka ~/pechka
+~/pechka/skills/new-workspace/new-workspace.sh --help
 ```
 
 ## Создать воркспейс
@@ -49,7 +49,7 @@ new-workspace.sh create ~/work/acme --team Acme \
 
 ## Обновить воркспейс
 
-karamel — upstream для созданных воркспейсов: `create` пишет его адрес в
+pechka — upstream для созданных воркспейсов: `create` пишет его адрес в
 `workspace.json` (`upstream`, `upstreamRef`). В самом воркспейсе:
 
 ```bash
@@ -57,7 +57,7 @@ karamel — upstream для созданных воркспейсов: `create` 
 ./ops upgrade
 ```
 
-`./ops upgrade` кладёт свежий karamel в `.agent-tools/upstream` (через
+`./ops upgrade` кладёт свежий pechka в `.agent-tools/upstream` (через
 `GITHUB_TOKEN`, как и остальной git-транспорт воркспейса) и запускает
 `new-workspace.sh upgrade`. Тот же скрипт можно вызвать и напрямую:
 `new-workspace.sh upgrade ~/work/acme`.
